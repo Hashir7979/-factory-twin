@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="3D discrete-event simulation digital twin of a production line: live KPIs, bottleneck analysis and what-if experiments." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>Factory Digital Twin</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#panel">Skip to controls and statistics</a>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Factory Digital Twin</span>
+        <span class="brand-tag">DES · 3D</span>
+      </div>
+      <label class="scenario-picker">
+        <span class="visually-hidden">Scenario</span>
+        <select id="scenario-select" aria-label="Scenario"></select>
+      </label>
+      <div id="conn" class="conn" role="status" aria-live="polite"><span class="dot"></span><span class="conn-text">Connecting…</span></div>
+    </header>
+
+    <main class="layout">
+      <section class="viewport" aria-label="3D view of the production line">
+        <div id="scene" class="scene"></div>
+        <div class="hud">
+          <div class="hud-clock" aria-live="off">
+            <span class="hud-label">Sim time</span>
+            <span id="sim-clock" class="mono">00:00:00</span>
+            <span id="warmup-badge" class="badge badge-warmup" hidden title="Statistics reset at the end of warm-up">Warm-up</span>
+          </div>
+          <div class="hud-actions">
+            <button id="fit-view" type="button" class="btn btn-ghost btn-sm" title="Fit view (F)">Fit view</button>
+          </div>
+        </div>
+        <div id="legend" class="legend" aria-label="Machine state colours"></div>
+        <div id="inspector" class="inspector" role="region" aria-labelledby="inspector-title" hidden></div>
+        <div id="overlay" class="overlay" hidden>
+          <div class="overlay-card" role="alertdialog" aria-labelledby="overlay-title" aria-describedby="overlay-text">
+            <h2 id="overlay-title">Connecting…</h2>
+            <p id="overlay-text"></p>
+            <button id="overlay-retry" type="button" class="btn btn-primary" hidden>Retry now</button>
+          </div>
+        </div>
+        <noscript><p class="noscript">This simulator needs JavaScript and WebGL.</p></noscript>
+      </section>
+
+      <aside id="panel" class="panel" tabindex="-1">
+        <div class="tabs" role="tablist" aria-label="Panels">
+          <button role="tab" id="tab-live" aria-controls="panel-live" aria-selected="true" type="button">Live</button>
+          <button role="tab" id="tab-what-if" aria-controls="panel-what-if" aria-selected="false" tabindex="-1" type="button">What-if</button>
+          <button role="tab" id="tab-experiments" aria-controls="panel-experiments" aria-selected="false" tabindex="-1" type="button">Experiments</button>
+          <button role="tab" id="tab-optimize" aria-controls="panel-optimize" aria-selected="false" tabindex="-1" type="button">Optimize</button>
+        </div>
+
+        <div role="tabpanel" id="panel-live" aria-labelledby="tab-live" class="tabpanel">
+          <section class="card controls" aria-label="Playback">
+            <div class="transport">
+              <button id="play" type="button" class="btn btn-primary" aria-keyshortcuts="Space">Play</button>
+              <button id="restart" type="button" class="btn">Restart</button>
+              <div class="speed">
+                <label for="speed">Speed <output id="speed-out" for="speed">30×</output></label>
+                <input id="speed" type="range" min="0" max="1000" step="1" value="500" />
+              </div>
+            </div>
+            <p class="muted small hint">Click a machine or buffer in the 3D view for details. Drag to orbit, scroll to zoom. <kbd>Space</kbd> play/pause, <kbd>F</kbd> fit view.</p>
+          </section>
+
+          <section class="card" aria-labelledby="h-kpis">
+            <h2 id="h-kpis" class="card-title">Line performance</h2>
+            <div id="kpi-cards" class="kpi-grid"></div>
+          </section>
+
+          <section class="card" aria-labelledby="h-bn">
+            <h2 id="h-bn" class="card-title">Bottleneck</h2>
+            <div id="bottleneck" class="bottleneck" aria-live="polite">Collecting data…</div>
+          </section>
+
+          <section class="card" aria-labelledby="h-trend">
+            <h2 id="h-trend" class="card-title">Trend</h2>
+            <div id="trend" class="chart"></div>
+          </section>
+
+          <section class="card" aria-labelledby="h-stations">
+            <h2 id="h-stations" class="card-title">Stations</h2>
+            <table class="data-table">
+              <thead><tr><th scope="col">Station</th><th scope="col" class="num">Util.</th><th scope="col" class="num">OEE</th><th scope="col">Time in state</th></tr></thead>
+              <tbody id="stations-body"></tbody>
+            </table>
+          </section>
+
+          <section class="card" aria-labelledby="h-timeline">
+            <h2 id="h-timeline" class="card-title">State timeline <span class="muted small">last 2 h</span></h2>
+            <canvas id="timeline" class="timeline" role="img" aria-label="Machine state timeline for the last two simulated hours; the stations table shows the same information as text."></canvas>
+          </section>
+
+          <section class="card" aria-labelledby="h-buffers">
+            <h2 id="h-buffers" class="card-title">Buffers</h2>
+            <table class="data-table">
+              <thead><tr><th scope="col">Buffer</th><th scope="col" class="num">Now</th><th scope="col" class="num">Avg</th><th scope="col" class="num">Wait</th><th scope="col">Avg fill</th></tr></thead>
+              <tbody id="buffers-body"></tbody>
+            </table>
+          </section>
+        </div>
+
+        <div role="tabpanel" id="panel-what-if" aria-labelledby="tab-what-if" class="tabpanel" hidden>
+          <section class="card" aria-labelledby="h-whatif">
+            <h2 id="h-whatif" class="card-title">What-if settings</h2>
+            <p class="muted small">Change capacities, staffing or demand and restart the live run. The Experiments tab compares these settings against the baseline statistically.</p>
+            <div id="settings"></div>
+          </section>
+        </div>
+
+        <div role="tabpanel" id="panel-experiments" aria-labelledby="tab-experiments" class="tabpanel" hidden>
+          <div id="experiments"></div>
+        </div>
+
+        <div role="tabpanel" id="panel-optimize" aria-labelledby="tab-optimize" class="tabpanel" hidden>
+          <div id="optimizer"></div>
+        </div>
+      </aside>
+    </main>
+    <div id="toasts" class="toasts"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
