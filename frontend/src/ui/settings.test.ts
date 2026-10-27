@@ -37,3 +37,24 @@ describe("what-if settings", () => {
     expect(diffOverrides(fields, values)).toEqual({ "station.weld.servers": 2 });
   });
 });
+
+describe("fleet scenarios", () => {
+  const fleet = {
+    output_station: "dump",
+    entity: "truck",
+    source: { max_arrivals: 4 },
+    stations: [{ id: "load", name: "Excavator", servers: 1, needs_operator: false }],
+    buffers: [{ id: "R", name: "Road", capacity: 20 }],
+    resources: { technicians: 1, operators: 0 },
+    run: { seed: 1 },
+  } as unknown as Scenario;
+
+  it("offers the fleet size, capped by road capacity, and hides road sizes", () => {
+    const fields = overrideFields(fleet);
+    const trucks = fields.find((f) => f.key === "source.max_arrivals")!;
+    expect(trucks.label).toBe("Trucks");
+    expect(trucks.max).toBe(20);
+    expect(fields.some((f) => f.key.startsWith("buffer."))).toBe(false);
+    expect(fields.some((f) => f.key === "source.interarrival_scale")).toBe(false);
+  });
+});

@@ -3,6 +3,7 @@ import { api } from "../net/api";
 import type { Economics, OptVariable, OptimizationResult, Overrides, Scenario } from "../types";
 import { clear, fmtNum, h } from "./dom";
 import { JobControl } from "./job";
+import { type EconScalar, economicsFields } from "./economics";
 import { overrideLabel } from "./labels";
 import { toast } from "./toast";
 
@@ -17,13 +18,10 @@ interface Defaults {
   max_trials: number;
 }
 
-const ECON_FIELDS: [keyof Economics, string][] = [
-  ["margin_per_part", "Margin per good part (€)"],
-  ["machine_cost_per_hour", "Machine cost (€/h each)"],
-  ["buffer_slot_cost_per_hour", "Buffer slot cost (€/h)"],
-  ["technician_cost_per_hour", "Technician cost (€/h)"],
-  ["operator_cost_per_hour", "Operator cost (€/h)"],
-];
+function bottleneckName(sc: Scenario, id: string | null): string {
+  if (id === "fleet") return sc.entity === "truck" ? "the truck fleet" : "the fleet";
+  return sc.stations.find((s) => s.id === id)?.name ?? "–";
+}
 
 const MAX_VARIABLES = 12; // backend limit (OptimizationRequest.variables)
 
@@ -43,7 +41,8 @@ export class OptimizerPanel {
   private readonly hours: HTMLInputElement;
   private readonly job: JobControl<OptimizationResult>;
   private rows: { include: HTMLInputElement; low: HTMLInputElement; high: HTMLInputElement; key: string }[] = [];
-  private econInputs = new Map<keyof Economics, HTMLInputElement>();
+  private econInputs = new Map<string, HTMLInputElement>();
+  private econDefaults: Economics | null = null;
   private loadedFor = "";
   private maxTrials = 60;
   private plot: uPlot | null = null;
@@ -94,7 +93,7 @@ export class OptimizerPanel {
     this.maxTrials = defaults.max_trials;
     this.trials.max = String(defaults.max_trials);
     this.renderVariables(sc, defaults.variables);
-    this.renderEconomics(defaults.economics);
+    this.renderEconomics(sc, defaults.economics);
   }
 
   private renderVariables(sc: Scenario, variables: OptVariable[]): void {
@@ -106,7 +105,7 @@ export class OptimizerPanel {
       const isServers = v.key.startsWith("station.");
       // Machines and staff by default; buffers are opt-in to keep the default search small.
       const include = h("input", { type: "checkbox", id, checked: !v.key.startsWith("buffer.") }) as HTMLInputElement;
-      const max = isServers ? 20 : v.key.startsWith("buffer.") ? 10000 : 100;
+      const max = isServers ? 20 : v.key.startsWith("buffer.") ? 10000 : v.key.startsWith("source.") ? 500 : 100;
       const low = h("input", { type: "number", min: 1, max, step: 1, value: v.low, "aria-label": `${overrideLabel(sc, v.key)} minimum` }) as HTMLInputElement;
       const high = h("input", { type: "number", min: 1, max, step: 1, value: v.high, "aria-label": `${overrideLabel(sc, v.key)} maximum` }) as HTMLInputElement;
       this.rows.push({ include, low, high, key: v.key });
@@ -117,12 +116,13 @@ export class OptimizerPanel {
     );
   }
 
-  private renderEconomics(e: Economics): void {
+  private renderEconomics(sc: Scenario, e: Economics): void {
     clear(this.econ);
     this.econInputs.clear();
-    for (const [key, label] of ECON_FIELDS) {
-      const id = `econ-${key}`;
-      const input = h("input", { id, type: "number", min: 0, step: "any", value: e[key] as number, inputmode: "decimal" }) as HTMLInputElement;
+    this.econDefaults = e;
+    for (const [key, label, value] of economicsFields(sc, e)) {
+      const id = `econ-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+      const input = h("input", { id, type: "number", min: 0, step: "any", value, inputmode: "decimal" }) as HTMLInputElement;
       this.econInputs.set(key, input);
       this.econ.append(h("div", { class: "field" }, h("label", { for: id }, label), input));
     }
@@ -147,7 +147,10 @@ export class OptimizerPanel {
       toast(`Select between 1 and ${MAX_VARIABLES} settings to optimize.`, "error");
       return null;
     }
-    const economics: Partial<Economics> = {};
+    // Start from the scenario's full cost model so fields not shown here are kept.
+    const base = this.econDefaults;
+    if (!base) return null;
+    const economics: Economics = { ...base, station_machine_cost_per_hour: { ...base.station_machine_cost_per_hour } };
     for (const [key, input] of this.econInputs) {
       const v = Number(input.value);
       if (input.value.trim() === "" || !(v >= 0)) {
@@ -155,7 +158,8 @@ export class OptimizerPanel {
         toast("Economics values must be numbers ≥ 0.", "error");
         return null;
       }
-      (economics as Record<string, number>)[key] = v;
+      if (key.startsWith("station:")) economics.station_machine_cost_per_hour[key.slice(8)] = v;
+      else economics[key as EconScalar] = v;
     }
     const trials = Number(this.trials.value);
     const reps = Number(this.reps.value);
@@ -181,6 +185,7 @@ export class OptimizerPanel {
     const sc = this.ctx.scenario();
     if (!sc) return;
     clear(this.results);
+    const closed = sc.output_station !== null && sc.output_station !== undefined;
     const changed = Object.entries(r.best.params).filter(([k, v]) => r.baseline.params[k] !== v);
     const bestOverrides: Overrides = Object.fromEntries(changed);
     const improved = r.improvement_per_hour > 0 && changed.length > 0;
@@ -221,7 +226,7 @@ export class OptimizerPanel {
         h(
           "p",
           { class: "muted small" },
-          `Throughput ${fmtNum(r.baseline.throughput.mean)} → ${fmtNum(r.best.throughput.mean)} parts/h; cost ${money(r.baseline.cost_per_hour)} → ${money(r.best.cost_per_hour)}/h. Bottleneck after change: ${sc.stations.find((s) => s.id === r.best.bottleneck)?.name ?? "–"}.`,
+          `Throughput ${fmtNum(r.baseline.throughput.mean)} → ${fmtNum(r.best.throughput.mean)} ${closed ? "loads" : "parts"}/h; cost ${money(r.baseline.cost_per_hour)} → ${money(r.best.cost_per_hour)}/h. Bottleneck after change: ${bottleneckName(sc, r.best.bottleneck)}.`,
         ),
         h("table", { class: "data-table result-table" }, h("thead", {}, h("tr", {}, h("th", {}, "Setting"), h("th", { class: "num" }, "Current"), h("th", { class: "num" }, "Best"))), h("tbody", {}, ...rows)),
         h("div", { class: "form-actions spaced" }, applyBtn),

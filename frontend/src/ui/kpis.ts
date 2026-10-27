@@ -4,18 +4,36 @@ import { MACHINE_STATES } from "../types";
 import { clear, fmtDuration, fmtNum, fmtPct, h } from "./dom";
 
 interface Card {
+  label: HTMLElement;
   value: HTMLElement;
   sub: HTMLElement;
 }
 
-const CARDS = [
-  ["throughput", "Throughput", "parts / hour (since warm-up)"],
-  ["rolling", "Last hour", "parts / hour"],
-  ["cycle", "Cycle time", "mean, source → shipping"],
-  ["wip", "WIP", "parts in system (time-avg)"],
-  ["oee", "Line OEE", "bottleneck A × P × Q"],
-  ["fpy", "First-pass yield", "passed first inspection"],
-] as const;
+type CardKey = "throughput" | "rolling" | "cycle" | "wip" | "oee" | "fpy";
+type CardText = Record<CardKey, [label: string, hint: string]>;
+
+const LINE_CARDS: CardText = {
+  throughput: ["Throughput", "parts / hour (since warm-up)"],
+  rolling: ["Last hour", "parts / hour"],
+  cycle: ["Cycle time", "mean, source → shipping"],
+  wip: ["WIP", "parts in system (time-avg)"],
+  oee: ["Line OEE", "bottleneck A × P × Q"],
+  fpy: ["First-pass yield", "passed first inspection"],
+};
+
+/** Closed networks (a circulating fleet): WIP and yield are meaningless, production and queueing are not. */
+function fleetCards(s: Scenario): CardText {
+  return {
+    throughput: ["Throughput", "loads / hour (since warm-up)"],
+    rolling: ["Last hour", "loads / hour"],
+    cycle: [`${s.entity === "truck" ? "Truck" : "Round"} cycle`, "mean round trip"],
+    wip: ["Production", `${s.output_unit} / hour`],
+    oee: ["Busiest station OEE", "A × P × Q"],
+    fpy: ["Queue time", "avg wait at busiest station"],
+  };
+}
+
+export const isClosed = (s: Scenario): boolean => s.output_station !== null && s.output_station !== undefined;
 
 export class KpiPanel {
   private cards = new Map<string, Card>();
@@ -25,11 +43,12 @@ export class KpiPanel {
   private legend: HTMLElement;
 
   constructor(cardsHost: HTMLElement, bottleneckHost: HTMLElement, stationsHost: HTMLElement, buffersHost: HTMLElement, legendHost: HTMLElement) {
-    for (const [key, label, hint] of CARDS) {
+    for (const [key, [title, hint]] of Object.entries(LINE_CARDS)) {
+      const label = h("div", { class: "kpi-label" }, title);
       const value = h("div", { class: "kpi-value" }, "–");
       const sub = h("div", { class: "kpi-sub" }, hint);
-      cardsHost.append(h("div", { class: "kpi-card" }, h("div", { class: "kpi-label" }, label), value, sub));
-      this.cards.set(key, { value, sub });
+      cardsHost.append(h("div", { class: "kpi-card" }, label, value, sub));
+      this.cards.set(key, { label, value, sub });
     }
     this.bottleneck = bottleneckHost;
     this.stationsBody = stationsHost;
@@ -47,6 +66,17 @@ export class KpiPanel {
     }
   }
 
+  /** Adapt card titles to the scenario (production line vs circulating fleet). */
+  configure(scenario: Scenario): void {
+    const text = isClosed(scenario) ? fleetCards(scenario) : LINE_CARDS;
+    for (const [key, [title, hint]] of Object.entries(text)) {
+      const card = this.cards.get(key);
+      if (!card) continue;
+      card.label.textContent = title;
+      card.sub.textContent = hint;
+    }
+  }
+
   reset(): void {
     for (const c of this.cards.values()) c.value.textContent = "–";
     clear(this.stationsBody);
@@ -61,9 +91,17 @@ export class KpiPanel {
     this.set("throughput", observed ? fmtNum(line.throughput_per_hour) : "–");
     this.set("rolling", msg.t > 0 ? fmtNum(msg.rolling_throughput) : "–");
     this.set("cycle", line.completed ? fmtDuration(line.mean_cycle_time) : "–");
-    this.set("wip", observed ? fmtNum(line.mean_wip) : String(line.wip));
     this.set("oee", observed ? fmtPct(line.line_oee) : "–");
-    this.set("fpy", line.completed ? fmtPct(line.first_pass_yield, 1) : "–");
+    if (isClosed(scenario)) {
+      this.set("wip", observed ? fmtNum(line.output_units_per_hour, 0) : "–");
+      const busiest = k.bottleneck.ranking[0]?.station;
+      const input = scenario.stations.find((st) => st.id === busiest)?.input;
+      const queue = k.buffers.find((b) => b.id === input)?.mean_queue_delay;
+      this.set("fpy", line.completed && queue !== undefined ? fmtDuration(queue) : "–");
+    } else {
+      this.set("wip", observed ? fmtNum(line.mean_wip) : String(line.wip));
+      this.set("fpy", line.completed ? fmtPct(line.first_pass_yield, 1) : "–");
+    }
     this.renderBottleneck(k);
     this.renderStations(k);
     this.renderBuffers(k, scenario);
@@ -81,7 +119,7 @@ export class KpiPanel {
       this.bottleneck.append(h("p", { class: "muted" }, b.explanation));
       return;
     }
-    const name = b.ranking[0]?.name ?? b.station;
+    const name = b.label ?? b.ranking[0]?.name ?? b.station;
     const badge = b.confidence === "clear" ? "Bottleneck" : "Shifting bottleneck";
     this.bottleneck.append(
       h("div", { class: "bn-head" }, h("span", { class: `badge badge-${b.confidence}` }, badge), h("strong", {}, name)),

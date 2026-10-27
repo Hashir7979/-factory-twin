@@ -78,3 +78,28 @@ test("scenario switch rebuilds the scene and updates the URL", async ({ page }) 
   await expect(page).toHaveURL(/scenario=fulfillment_center/);
   await expect(page.locator(".machine-label", { hasText: "Packing" }).first()).toBeVisible();
 });
+
+test("earthmoving scenario shows trucks, the fleet constraint and a fleet-size control", async ({ page }) => {
+  const errors = trackErrors(page);
+  await page.goto("/?scenario=earthmoving");
+  await expect(page.locator("#conn")).toHaveAttribute("data-state", "open");
+  await expect(page.locator(".machine-label", { hasText: "Excavator" })).toBeVisible();
+  await expect(page.locator(".buffer-label", { hasText: "Haul Road" })).toBeVisible();
+  await expect(page.locator(".kpi-card").nth(3).locator(".kpi-label")).toHaveText("Production");
+
+  await page.locator("#speed").fill("1000");
+  await page.locator("#play").click();
+  await expect(page.locator("#bottleneck")).toContainText("Truck fleet", { timeout: 30_000 });
+
+  await page.getByRole("tab", { name: "What-if" }).click();
+  const trucks = page.locator('input[name="source.max_arrivals"]');
+  await expect(trucks).toHaveValue("4");
+  await trucks.fill("21");
+  await expect(trucks).toHaveAttribute("aria-invalid", "true"); // roads hold at most 20 trucks
+  await trucks.fill("7");
+  await page.getByRole("button", { name: "Apply & restart" }).click();
+  await page.getByRole("tab", { name: "Optimize" }).click();
+  await expect(page.locator("#optimizer .opt-vars")).toContainText("Trucks");
+  await expect(page.locator("#optimizer")).toContainText("Truck cost");
+  expect(errors).toEqual([]);
+});

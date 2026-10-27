@@ -51,3 +51,23 @@ describe("buildLayout", () => {
     expect(queueSlot(layout, "Q", 8).stack).toBe(3); // overflow stacks on the last slot
   });
 });
+
+describe("earthmoving geometry", () => {
+  it("never squeezes more trucks onto a road than fit bumper to bumper", async () => {
+    const { travelSlots, TRUCK_PITCH } = await import("./layout");
+    const line = new Polyline([{ x: 0, z: 0 }, { x: 16, z: 0 }]);
+    const road = { kind: "road", capacity: 20 } as unknown as import("../types").BufferCfg;
+    const conveyor = { kind: "conveyor", capacity: 20 } as unknown as import("../types").BufferCfg;
+    expect(travelSlots(road, line)).toBe(Math.floor(16 / TRUCK_PITCH));
+    expect(travelSlots(conveyor, line)).toBe(20);
+  });
+
+  it("parks trucks beside the excavator and on the ground", async () => {
+    const { productAnchor } = await import("./layout");
+    const spot = { x: 10, z: 0, station: "load", angle: 0 };
+    const exc = productAnchor("excavator", spot);
+    expect(exc.y).toBe(0);
+    expect(Math.hypot(exc.x - 10, exc.z)).toBeCloseTo(3.4);
+    expect(productAnchor("machine", spot).y).toBeGreaterThan(1); // parts sit on top of machines
+  });
+});

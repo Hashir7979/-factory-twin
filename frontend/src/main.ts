@@ -223,6 +223,8 @@ class App {
     this.clock.reset(msg.snapshot.t, performance.now());
     if (sceneKey !== this.sceneKey) {
       this.scene.build(msg.scenario);
+      this.kpis.configure(msg.scenario);
+      this.chart.setWipLabel(msg.scenario.output_station ? (msg.scenario.entity === "truck" ? "Trucks" : "Fleet") : "WIP");
       this.sceneKey = sceneKey;
     } else if (isNewModel) {
       this.scene.resetProducts();

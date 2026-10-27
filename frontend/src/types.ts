@@ -19,8 +19,9 @@ export interface BufferCfg {
   id: string;
   name: string;
   capacity: number | null;
-  kind: "queue" | "conveyor";
+  kind: "queue" | "conveyor" | "road";
   transit_time: number;
+  transit: Distribution | null;
   pos: Point;
   path: Point[] | null;
 }
@@ -37,6 +38,7 @@ export interface StationCfg {
   failure: { ttf: Distribution; ttr: Distribution } | null;
   needs_operator: boolean;
   qc: { pass_prob: number; rework_prob: number; rework_output: string | null } | null;
+  model: "machine" | "excavator" | "dump";
   pos: Point;
 }
 
@@ -45,12 +47,18 @@ export interface Scenario {
   name: string;
   description: string;
   variants: Variant[];
-  source: { id: string; name: string; interarrival: Distribution; output: string; pos: Point };
+  source: { id: string; name: string; interarrival: Distribution; output: string; max_arrivals: number | null; pos: Point };
   buffers: BufferCfg[];
   stations: StationCfg[];
   resources: { technicians: number | null; operators: number };
   sink: { pos: Point };
   run: { horizon: number; warmup: number; seed: number };
+  economics: Economics;
+  entity: "part" | "truck";
+  /** Set for closed networks (a circulating fleet with no sink). */
+  output_station: string | null;
+  output_unit: string;
+  units_per_output: number;
 }
 
 export interface ScenarioSummary {
@@ -113,6 +121,7 @@ export interface BufferKpi {
   mean_level: number;
   max_level: number;
   mean_wait: number;
+  mean_queue_delay: number;
   fill_pct: number | null;
 }
 
@@ -126,6 +135,7 @@ export interface LineKpi {
   wip: number;
   mean_wip: number;
   throughput_per_hour: number;
+  output_units_per_hour: number;
   mean_cycle_time: number;
   cycle_time_std: number;
   first_pass_yield: number;
@@ -134,7 +144,8 @@ export interface LineKpi {
 }
 
 export interface BottleneckReport {
-  station: string | null;
+  station: string | null; // a station id, "fleet" or null
+  label: string | null;
   confidence: "clear" | "shifting" | "none";
   ranking: { station: string; name: string; active_pct: number }[];
   upstream_blocked_pct: number | null;
@@ -155,7 +166,7 @@ export interface Kpis {
 export interface Snapshot {
   t: number;
   machines: Record<string, { state: MachineState; product: number | null }>;
-  buffers: Record<string, { product: number; ready_at: number }[]>;
+  buffers: Record<string, { product: number; entered_at?: number; ready_at: number }[]>;
   products: Record<string, string>; // product id → variant
 }
 
@@ -285,6 +296,7 @@ export interface Economics {
   buffer_slot_cost_per_hour: number;
   technician_cost_per_hour: number;
   operator_cost_per_hour: number;
+  fleet_cost_per_hour: number;
 }
 
 export interface Evaluation {
@@ -293,7 +305,7 @@ export interface Evaluation {
   revenue_per_hour: number;
   cost_per_hour: number;
   profit: Estimate;
-  costs: { machines: number; buffers: number; technicians: number; operators: number };
+  costs: { machines: number; buffers: number; technicians: number; operators: number; fleet: number };
   bottleneck: string | null;
 }
 

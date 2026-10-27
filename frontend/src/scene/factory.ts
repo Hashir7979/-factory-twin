@@ -2,8 +2,9 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { LineState } from "../sim/state";
-import type { MachineState, Scenario } from "../types";
-import { type Layout, buildLayout, conveyorDistance, queueSlot } from "./layout";
+import type { MachineState, Scenario, StationCfg } from "../types";
+import { type Layout, buildLayout, conveyorDistance, productAnchor, queueSlot, travelSlots } from "./layout";
+import { type ModelParts, dumpSite, excavator, roadSegment, truckGeometry } from "./models";
 
 // Colour convention follows common DES tools (green = working, yellow = blocked, red = failed).
 export const STATE_COLORS: Record<MachineState, string> = {
@@ -26,7 +27,7 @@ export const STATE_LABELS: Record<MachineState, string> = {
 
 export type Pick = { kind: "machine"; id: string } | { kind: "buffer"; id: string } | null;
 
-const PRODUCT_Y = { queue: 0.2, conveyor: 0.98, machine: 1.42, stack: 0.34 };
+const PRODUCT_Y = { queue: 0.2, conveyor: 0.98, road: 0.06, machine: 1.42, stack: 0.34 };
 const LEAVE_SECONDS = 0.7;
 const INITIAL_INSTANCES = 256;
 
@@ -36,6 +37,7 @@ interface MachineVisual {
   ring: THREE.MeshBasicMaterial;
   label: HTMLElement;
   state: MachineState | null;
+  swing?: THREE.Object3D | undefined;
 }
 
 interface ProductVisual {
@@ -81,6 +83,9 @@ export class FactoryScene {
   private variantColors = new Map<string, THREE.Color>();
   private selection: THREE.Mesh;
   private frame = 0;
+  private elapsed = 0;
+  private stationModels = new Map<string, StationCfg["model"]>();
+  private entity: Scenario["entity"] = "part";
   private readonly tmpMatrix = new THREE.Matrix4();
   private readonly tmpQuat = new THREE.Quaternion();
   private readonly tmpScale = new THREE.Vector3(1, 1, 1);
@@ -132,6 +137,12 @@ export class FactoryScene {
   build(scenario: Scenario): void {
     this.clear();
     this.scenario = scenario;
+    if (scenario.entity !== this.entity) {
+      // Trucks and parts use different instanced geometry.
+      this.entity = scenario.entity;
+      this.replaceProductMesh(this.products.instanceMatrix.count);
+    }
+    this.stationModels = new Map(scenario.stations.map((s) => [s.id, s.model ?? "machine"]));
     const layout = buildLayout(scenario);
     this.layout = layout;
     this.variantColors = new Map(scenario.variants.map((v) => [v.id, new THREE.Color(v.color)]));
@@ -156,7 +167,10 @@ export class FactoryScene {
     const stationById = new Map(scenario.stations.map((s) => [s.id, s]));
     for (const [id, spot] of layout.machines) {
       const st = stationById.get(spot.station)!;
-      const visual = this.makeMachine(id, st.name, st.kind === "qc", st.servers > 1);
+      const model = st.model ?? "machine";
+      const title = st.servers > 1 ? `${st.name} ${id.split("#")[1]}` : st.name;
+      const visual =
+        model === "machine" ? this.makeMachine(id, st.name, st.kind === "qc", st.servers > 1) : this.makeModel(id, title, model === "excavator" ? excavator() : dumpSite());
       visual.group.position.set(spot.x, 0, spot.z);
       visual.group.rotation.y = spot.angle;
       this.root.add(visual.group);
@@ -165,12 +179,17 @@ export class FactoryScene {
 
     for (const b of scenario.buffers) {
       const line = layout.conveyors.get(b.id);
-      if (line) this.makeConveyor(b.id, b.name, line.points);
+      if (line && b.kind === "road") this.makeRoad(b.id, b.name, line.points);
+      else if (line) this.makeConveyor(b.id, b.name, line.points);
       else this.makeQueueArea(b.id, b.name);
     }
-    this.makeLandmark(layout.source, scenario.source.name, "#64748b", 2.2);
-    this.makeLandmark(layout.sink, "Shipping", "#0f766e", 1.4);
-    this.makeLandmark(layout.scrap, "Scrap", "#b91c1c", 0.9);
+    const closed = !scenario.stations.some((s) => s.output === "sink");
+    this.makeLandmark(layout.source, scenario.source.name, "#64748b", closed ? 0.15 : 2.2);
+    if (!closed) {
+      // Closed loops (e.g. truck fleets) have no shipping or scrap area.
+      this.makeLandmark(layout.sink, "Shipping", "#0f766e", 1.4);
+      this.makeLandmark(layout.scrap, "Scrap", "#b91c1c", 0.9);
+    }
 
     this.fitCamera();
   }
@@ -237,6 +256,38 @@ export class FactoryScene {
     obj.position.set(0, 3.5, 0);
     group.add(obj);
     return { group, lamp: lampMat, ring: ringMat, label: el, state: null };
+  }
+
+  /** Earthmoving equipment built in models.ts, wired up like a machine. */
+  private makeModel(id: string, title: string, parts: ModelParts): MachineVisual {
+    parts.group.userData = { pick: { kind: "machine", id } };
+    for (const m of parts.meshes) {
+      m.userData = parts.group.userData;
+      this.pickables.push(m);
+    }
+    const { obj, el } = this.label(title, "machine-label");
+    obj.position.set(0, parts.labelHeight, 0);
+    parts.group.add(obj);
+    return { group: parts.group, lamp: parts.lamp, ring: parts.ring, label: el, state: null, swing: parts.swing };
+  }
+
+  private makeRoad(id: string, name: string, points: { x: number; z: number }[]): void {
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      const { group, surface } = roadSegment(Math.hypot(b.x - a.x, b.z - a.z));
+      group.position.set((a.x + b.x) / 2, 0, (a.z + b.z) / 2);
+      group.rotation.y = Math.atan2(-(b.z - a.z), b.x - a.x);
+      surface.userData = { pick: { kind: "buffer", id } };
+      this.pickables.push(surface);
+      this.root.add(group);
+    }
+    const mid = points[Math.floor((points.length - 1) / 2)]!;
+    const next = points[Math.floor((points.length - 1) / 2) + 1]!;
+    const { obj, el } = this.label(name, "buffer-label");
+    obj.position.set((mid.x + next.x) / 2, 1.2, (mid.z + next.z) / 2);
+    this.root.add(obj);
+    this.bufferLabels.set(id, el);
   }
 
   private makeConveyor(id: string, name: string, points: { x: number; z: number }[]): void {
@@ -312,9 +363,10 @@ export class FactoryScene {
   }
 
   private makeProductMesh(capacity: number): THREE.InstancedMesh {
+    const truck = this.entity === "truck";
     const mesh = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(0.72, 0.3, 0.56),
-      new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.2 }),
+      truck ? truckGeometry() : new THREE.BoxGeometry(0.72, 0.3, 0.56),
+      new THREE.MeshStandardMaterial({ roughness: truck ? 0.6 : 0.4, metalness: 0.2, vertexColors: truck }),
       capacity,
     );
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -328,11 +380,15 @@ export class FactoryScene {
     if (n <= this.products.instanceMatrix.count) return;
     let cap = this.products.instanceMatrix.count;
     while (cap < n) cap *= 2;
+    this.replaceProductMesh(cap);
+  }
+
+  private replaceProductMesh(capacity: number): void {
     this.scene.remove(this.products);
     this.products.geometry.dispose();
     (this.products.material as THREE.Material).dispose();
     this.products.dispose();
-    this.products = this.makeProductMesh(cap);
+    this.products = this.makeProductMesh(capacity);
     this.scene.add(this.products);
   }
 
@@ -448,8 +504,14 @@ export class FactoryScene {
   update(state: LineState, now: number, dt: number): void {
     if (!this.layout || !this.scenario) return;
     this.frame++;
+    this.elapsed += dt;
     for (const [id, m] of state.machines) {
       const v = this.machineVisuals.get(id);
+      if (v?.swing) {
+        // Excavator swings between the dig face and the truck while loading.
+        const target = m.state === "processing" && !this.reducedMotion.matches ? -(Math.PI / 4) * (1 - Math.cos(this.elapsed * 2.4)) : 0;
+        v.swing.rotation.y += (target - v.swing.rotation.y) * Math.min(1, dt * 8);
+      }
       if (!v || v.state === m.state) continue;
       v.state = m.state;
       const c = STATE_COLORS[m.state];
@@ -476,15 +538,15 @@ export class FactoryScene {
     const loc = p.loc;
     if (loc.kind === "machine") {
       const m = layout.machines.get(loc.id);
-      if (m) return { x: m.x, y: PRODUCT_Y.machine, z: m.z, angle: m.angle };
+      if (m) return productAnchor(this.stationModels.get(m.station) ?? "machine", m);
     } else if (loc.kind === "buffer") {
       const k = state.buffers.get(loc.id)?.indexOf(id) ?? 0;
       const line = layout.conveyors.get(loc.id);
       if (line) {
         const cfg = this.scenario!.buffers.find((b) => b.id === loc.id)!;
-        const d = conveyorDistance(line, cfg.capacity ?? 1, Math.max(0, k), loc.enteredAt, loc.readyAt, now);
+        const d = conveyorDistance(line, travelSlots(cfg, line), Math.max(0, k), loc.enteredAt, loc.readyAt, now);
         const at = line.at(d);
-        return { x: at.x, y: PRODUCT_Y.conveyor, z: at.z, angle: at.angle };
+        return { x: at.x, y: cfg.kind === "road" ? PRODUCT_Y.road : PRODUCT_Y.conveyor, z: at.z, angle: at.angle };
       }
       const slot = queueSlot(layout, loc.id, Math.max(0, k));
       const q = layout.queues.get(loc.id)!;

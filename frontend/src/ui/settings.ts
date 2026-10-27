@@ -15,11 +15,19 @@ interface Field {
 /** Same limits as backend/sim/config.py OVERRIDABLE; the server re-validates. */
 export function overrideFields(base: Scenario): Field[] {
   const fields: Field[] = [];
+  const closed = base.output_station !== null && base.output_station !== undefined;
+  if (closed && base.source.max_arrivals) {
+    // The fleet must fit in every road/buffer (the server enforces the same rule).
+    const ceiling = Math.min(500, ...base.buffers.map((b) => b.capacity ?? 500));
+    const noun = base.entity === "truck" ? "Trucks" : "Fleet size";
+    fields.push({ key: "source.max_arrivals", label: noun, group: "Fleet", base: base.source.max_arrivals, min: 1, max: ceiling, step: 1, integer: true });
+  }
   for (const st of base.stations) {
     fields.push({ key: `station.${st.id}.servers`, label: st.name, group: "Machines per station", base: st.servers, min: 1, max: 20, step: 1, integer: true });
   }
   for (const b of base.buffers) {
-    if (b.capacity !== null) {
+    // In a closed loop, road sizes are not design levers.
+    if (b.capacity !== null && !closed) {
       fields.push({ key: `buffer.${b.id}.capacity`, label: b.name, group: "Buffer capacity", base: b.capacity, min: 1, max: 10000, step: 1, integer: true });
     }
   }
@@ -29,7 +37,9 @@ export function overrideFields(base: Scenario): Field[] {
   if (base.stations.some((s) => s.needs_operator)) {
     fields.push({ key: "resources.operators", label: "Operators", group: "People", base: base.resources.operators, min: 1, max: 200, step: 1, integer: true });
   }
-  fields.push({ key: "source.interarrival_scale", label: "Arrival interval ×", group: "Demand", base: 1, min: 0.1, max: 10, step: 0.05, integer: false });
+  if (!closed) {
+    fields.push({ key: "source.interarrival_scale", label: "Arrival interval ×", group: "Demand", base: 1, min: 0.1, max: 10, step: 0.05, integer: false });
+  }
   return fields;
 }
 

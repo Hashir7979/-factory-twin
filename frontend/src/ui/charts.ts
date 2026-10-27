@@ -10,6 +10,7 @@ function cssVar(name: string, fallback: string): string {
 /** Live line chart of rolling throughput and WIP against simulated hours. */
 export class TrendChart {
   private plot: uPlot | null = null;
+  private wipLabel = "WIP";
   private data: [number[], (number | null)[], (number | null)[]] = [[], [], []];
   private readonly observer: ResizeObserver;
 
@@ -32,7 +33,7 @@ export class TrendChart {
         series: [
           { label: "Sim hour", value: (_u, v) => (v === null ? "–" : `${v.toFixed(2)} h`) },
           { label: "Throughput /h", stroke: "#3b82f6", width: 2, scale: "tp", value: (_u, v) => (v === null ? "–" : v.toFixed(1)) },
-          { label: "WIP", stroke: "#f59e0b", width: 2, scale: "wip", value: (_u, v) => (v === null ? "–" : v.toFixed(0)) },
+          { label: this.wipLabel, stroke: "#f59e0b", width: 2, scale: "wip", value: (_u, v) => (v === null ? "–" : v.toFixed(0)) },
         ],
         axes: [
           { ...axis, values: (_u, vals) => vals.map((v) => `${v}h`) },
@@ -57,6 +58,13 @@ export class TrendChart {
       this.data = [xs.filter((_, i) => i % 2 === 0), tp.filter((_, i) => i % 2 === 0), wp.filter((_, i) => i % 2 === 0)];
     }
     this.plot?.setData(this.data);
+  }
+
+  /** Rename the second series (e.g. "Trucks" for a fleet, where WIP is the fleet size). */
+  setWipLabel(label: string): void {
+    if (label === this.wipLabel) return;
+    this.wipLabel = label;
+    this.create();
   }
 
   reset(): void {

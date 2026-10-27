@@ -12,6 +12,10 @@
   - stochastic process times and product variants with changeovers
   - preempt-resume breakdowns (MTBF/MTTR) with a shared technician pool, plus shared operators
   - QC with rework loops and scrap
+- **Three scenarios across industries, one engine:**
+  - an EV battery assembly line
+  - an e-commerce fulfillment center
+  - an earthmoving truck fleet, which tests a closed network: trucks cycle between an excavator and a dump, and the engine answers "how many trucks?"
 - **A live 3D twin.** The scene is generated from the same JSON scenario the engine runs. Machines show their state (working / setup / starved / blocked / down), parts ride conveyors, and buffers fill up. Click any machine to inspect it or break it down on the spot.
 - **Decision support:**
   - KPIs (throughput, cycle time, WIP, OEE, first-pass yield)
@@ -27,18 +31,18 @@
   - typed API with input validation
   - resumable WebSocket sessions with origin checks and rate limits
   - process-pool job queue
-  - 75 backend tests, 20 frontend unit tests and 7 Playwright E2E tests
+  - 89 backend tests, 25 frontend unit tests and 8 Playwright E2E tests
   - CI, plus a single-container Docker deploy
 
 | Experiments: paired comparison | Optimization with confirmation |
 |---|---|
 | ![](docs/img/experiments.png) | ![](docs/img/optimizer.png) |
 
-| Second scenario: fulfillment center (same engine, JSON only) | Mobile |
+| Earthmoving: excavator + truck fleet (closed network) | Fulfillment center (same engine, JSON only) |
 |---|---|
-| ![](docs/img/fulfillment.png) | <img src="docs/img/mobile.png" width="260"> |
+| ![](docs/img/earthmoving.png) | ![](docs/img/fulfillment.png) |
 
-## Case-study results (EV battery-module line)
+## Case-study results
 
 All numbers come from [`docs/findings.md`](docs/findings.md). The script `python -m experiments.case_study` regenerates that file with fixed seeds.
 
@@ -49,6 +53,7 @@ All numbers come from [`docs/findings.md`](docs/findings.md). The script `python
   - **Doubling the buffer in front of welding:** no throughput gain (+0.05/h), but +5.8 parts of WIP and +5.3 min lead time (Little's Law in action).
   - **Second welder plus third stacking cell:** +13.8 parts/h (+21.5%).
 - **Optimization:** about +€3,100/h hourly profit (±€500, statistically significant on fresh seeds). The welder and the stacking cell carry the gain; the extra technician the search proposes is flagged as not significant.
+- **Earthmoving fleet sizing:** a sweep from 2 to 10 trucks shows output rising until about 6 trucks, where the excavator becomes the limit (about 340 m³/h). After that, extra trucks only add queueing at the excavator, up to 18 minutes per cycle. Cost per m³ is lowest at 5 trucks. The textbook match-factor formula predicts the crossover at about 4.8 trucks; the simulation shows random haul times and breakdowns push it about one truck higher.
 
 ## Quick start
 
@@ -80,6 +85,7 @@ Command line, without the UI:
 cd backend
 python -m sim run battery_line --seed 7          # one replication, KPI table
 python -m sim run fulfillment_center --json      # full KPI document
+python -m sim run earthmoving                    # truck fleet: production, cycle, constraint
 python -m experiments.case_study > ../docs/findings.md
 ```
 
@@ -142,6 +148,8 @@ Distributions: constant, exponential, uniform, triangular, normal (truncated), l
               "ttr": {"type": "lognormal", "mean": 600, "std": 300}} }
 ```
 
+**Closed networks.** When no station outputs to the sink, a fixed fleet circulates (e.g. trucks). Production is counted at `output_station`, and cycle time is each unit's round trip. Validation requires every buffer to hold the whole fleet, which makes deadlock impossible. Roads are conveyors with random travel times; the time spent queueing after travel (trucks waiting at the excavator) is reported separately. When the busiest station is starved, the bottleneck report names the fleet itself as the constraint.
+
 Key modelling decisions (`sim/model.py`):
 
 - **Interrupt-safe machines.** Breakdowns are SimPy interrupts. Every place a machine can wait goes through one helper that cancels pending resource requests, so a part is never silently lost, and interrupted work resumes with its remaining time. A conservation test checks that created = completed + scrapped + WIP.
@@ -169,7 +177,7 @@ KPI definitions (`sim/kpi.py`):
 | GET | `/api/jobs/{id}`, `/api/jobs/{id}/runs.csv` | progress / result, per-replication CSV |
 | WS | `/ws/session?scenario=…&resume=…` | live session |
 
-Only whitelisted overrides are accepted (`buffer.<id>.capacity`, `station.<id>.servers`, `resources.technicians|operators`, `source.interarrival_scale`), each with bounds. The result is re-validated as a complete scenario.
+Only whitelisted overrides are accepted (`buffer.<id>.capacity`, `station.<id>.servers`, `resources.technicians|operators`, `source.interarrival_scale`, `source.max_arrivals` for fleet size), each with bounds. The result is re-validated as a complete scenario.
 
 ## Testing
 
@@ -200,7 +208,7 @@ backend/
   sim/           engine: config schema, distributions, model, monitor, KPIs, bottleneck, CLI
   experiments/   replications, statistics (CI, paired diff, MSER), optimizer, case study
   api/           FastAPI app, REST routes, WebSocket sessions, job manager, settings
-  scenarios/     battery_line.json, fulfillment_center.json
+  scenarios/     battery_line.json, fulfillment_center.json, earthmoving.json
   tests/
 frontend/
   src/net/       WebSocket client (reconnect/resume), REST client

@@ -1,4 +1,4 @@
-import type { BufferCfg, Point, Scenario } from "../types";
+import type { BufferCfg, Point, Scenario, StationCfg } from "../types";
 
 // Pure geometry: where every machine, buffer slot and conveyor position is on
 // the floor. Kept free of Three.js so it can be unit tested.
@@ -91,7 +91,7 @@ export function buildLayout(scenario: Scenario): Layout {
   const queues: Layout["queues"] = new Map();
   const conveyors = new Map<string, Polyline>();
   for (const b of scenario.buffers) {
-    if (b.kind === "conveyor" && b.path) {
+    if ((b.kind === "conveyor" || b.kind === "road") && b.path) {
       conveyors.set(b.id, new Polyline(b.path.map(toXZ)));
       continue;
     }
@@ -152,4 +152,27 @@ export function conveyorDistance(
   const maxDist = Math.max(0, line.length - (k + 0.5) * pitch);
   const travel = readyAt > enteredAt ? Math.min(1, Math.max(0, (now - enteredAt) / (readyAt - enteredAt))) : 1;
   return Math.min(travel * line.length, maxDist);
+}
+
+/** Spacing between queued trucks on a road, in metres of road. */
+export const TRUCK_PITCH = 3.2;
+
+/** Slots used to lay out entities along a conveyor or road. */
+export function travelSlots(b: BufferCfg, line: Polyline): number {
+  const capacity = b.capacity ?? 1;
+  // Trucks are long: never squeeze more onto a road than fit bumper to bumper.
+  return b.kind === "road" ? Math.max(1, Math.min(capacity, Math.floor(line.length / TRUCK_PITCH))) : capacity;
+}
+
+/**
+ * Where an entity sits while a station works on it. Parts sit on top of a
+ * machine; trucks park beside the excavator (local +z) or on the dump pad.
+ */
+export function productAnchor(model: StationCfg["model"], spot: MachineSpot): XZ & { y: number; angle: number } {
+  if (model === "excavator") {
+    const d = 3.4;
+    return { x: spot.x + d * Math.sin(spot.angle), z: spot.z + d * Math.cos(spot.angle), y: 0, angle: spot.angle };
+  }
+  if (model === "dump") return { x: spot.x, z: spot.z, y: 0.06, angle: spot.angle + Math.PI };
+  return { x: spot.x, z: spot.z, y: 1.42, angle: spot.angle };
 }

@@ -1,8 +1,16 @@
 import { STATE_COLORS, STATE_LABELS, type Pick } from "../scene/factory";
 import type { LineState } from "../sim/state";
-import type { Kpis, Scenario } from "../types";
+import type { BufferCfg, Kpis, Scenario } from "../types";
 import { MACHINE_STATES } from "../types";
 import { clear, fmtDuration, fmtNum, fmtPct, h } from "./dom";
+
+function meanTransit(b: BufferCfg): number {
+  const t = b.transit;
+  if (!t) return b.transit_time;
+  if (typeof t.mean === "number") return t.mean;
+  if (typeof t.value === "number") return t.value;
+  return b.transit_time;
+}
 
 /** Details card for the selected machine or buffer, with a failure-injection control. */
 export class Inspector {
@@ -114,7 +122,7 @@ export class Inspector {
           "dl",
           { class: "facts" },
           h("dt", {}, "Type"),
-          h("dd", {}, b.kind === "conveyor" ? `Conveyor · ${fmtDuration(b.transit_time)} transit` : "Queue"),
+          h("dd", {}, b.kind === "queue" ? "Queue" : `${b.kind === "road" ? "Road" : "Conveyor"} · ${fmtDuration(meanTransit(b))} travel`),
           h("dt", {}, "Contents"),
           h("dd", {}, `${level}${b.capacity ? ` / ${b.capacity}` : ""}`),
           h("dt", {}, "Avg level"),
@@ -123,6 +131,9 @@ export class Inspector {
           h("dd", {}, fmtNum(bk?.max_level, 0)),
           h("dt", {}, "Avg wait"),
           h("dd", {}, bk ? fmtDuration(bk.mean_wait) : "–"),
+          ...(b.kind === "queue"
+            ? []
+            : [h("dt", {}, "Avg queueing after travel"), h("dd", {}, bk ? fmtDuration(bk.mean_queue_delay) : "–")]),
         ),
       );
     }

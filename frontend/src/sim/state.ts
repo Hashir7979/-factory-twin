@@ -75,7 +75,9 @@ export class LineState {
       );
       for (const it of items) {
         const p = this.products.get(it.product);
-        if (p) p.loc = { kind: "buffer", id: b.id, enteredAt: it.ready_at - (transit.get(b.id) ?? 0), readyAt: it.ready_at };
+        // Older servers omit entered_at; fall back to the constant transit time.
+        const enteredAt = it.entered_at ?? it.ready_at - (transit.get(b.id) ?? 0);
+        if (p) p.loc = { kind: "buffer", id: b.id, enteredAt, readyAt: it.ready_at };
       }
     }
     for (const [mid, m] of Object.entries(snap.machines)) {

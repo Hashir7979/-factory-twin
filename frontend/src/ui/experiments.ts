@@ -3,7 +3,7 @@ import { api } from "../net/api";
 import type { ComparisonResult, ExperimentResult, Overrides, Scenario } from "../types";
 import { clear, fmtClock, fmtPct, h } from "./dom";
 import { JobControl } from "./job";
-import { METRICS, describeOverrides, fmtEstimate } from "./labels";
+import { METRICS, describeOverrides, fmtEstimate, metricsFor } from "./labels";
 import { toast } from "./toast";
 
 interface Context {
@@ -110,7 +110,7 @@ export class ExperimentsPanel {
   }
 
   private showSingle(r: ExperimentResult, sc: Scenario): void {
-    const rows = Object.entries(METRICS).map(([key, m]) => {
+    const rows = metricsFor(sc).map(([key, m]) => {
       const e = r.metrics[key]!;
       return h("tr", {}, h("th", { scope: "row" }, m.label), h("td", { class: "num" }, fmtEstimate(e, m.fmt)), h("td", { class: "num muted" }, `${m.fmt(e.min)} – ${m.fmt(e.max)}`));
     });
@@ -129,7 +129,7 @@ export class ExperimentsPanel {
 
   private showComparison(r: ComparisonResult, sc: Scenario): void {
     const rows = r.differences
-      .filter((d) => METRICS[d.metric])
+      .filter((d) => metricsFor(sc).some(([k]) => k === d.metric))
       .map((d) => {
         const m = METRICS[d.metric]!;
         const better = d.diff.mean === 0 ? null : (d.diff.mean > 0) === m.higherIsBetter;

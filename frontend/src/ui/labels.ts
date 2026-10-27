@@ -8,6 +8,7 @@ export function overrideLabel(s: Scenario, key: string): string {
   if (key === "resources.technicians") return "Technicians";
   if (key === "resources.operators") return "Operators";
   if (key === "source.interarrival_scale") return "Arrival interval ×";
+  if (key === "source.max_arrivals") return s.entity === "truck" ? "Trucks" : "Fleet size";
   return key;
 }
 
@@ -33,4 +34,11 @@ export const METRICS: Record<string, MetricInfo> = {
 
 export function fmtEstimate(e: Estimate, fmt: (x: number) => string): string {
   return e.n > 1 ? `${fmt(e.mean)} ± ${fmt(e.half_width)}` : fmt(e.mean);
+}
+
+/** Metrics worth showing for a scenario: WIP, yield and scrap are constant in a closed fleet loop. */
+export function metricsFor(s: Scenario): [string, MetricInfo][] {
+  const closed = s.output_station !== null && s.output_station !== undefined;
+  const skip = closed ? new Set(["mean_wip", "first_pass_yield", "scrapped"]) : new Set<string>();
+  return Object.entries(METRICS).filter(([k]) => !skip.has(k));
 }
