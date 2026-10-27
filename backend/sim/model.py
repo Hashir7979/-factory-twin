@@ -419,6 +419,7 @@ class FactoryModel:
             mon.total_completed += 1
             mon.completion_times.append(now)
             ct = now - product.created
+            mon.completion_cycle_times.append(ct)
             mon.cycle_time.add(ct)
             mon.cycle_time_by_variant.setdefault(product.variant, Tally()).add(ct)
         if mon.streaming:
@@ -462,6 +463,12 @@ class FactoryModel:
             self.reset_stats()
         if until > self.env.now:
             self.env.run(until=until)
+
+    def settle(self) -> None:
+        """Process events due at the current instant without advancing time."""
+        env = self.env
+        while env.peek() == env.now:
+            env.step()
 
     def inject_failure(self, machine_id: str, repair_time: float | None = None) -> bool:
         machine = self.machines.get(machine_id)

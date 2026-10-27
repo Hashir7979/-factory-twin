@@ -155,6 +155,7 @@ class Monitor:
         # Completion timestamps for the whole run (warm-up included): used for
         # throughput time series and Welch's warm-up analysis.
         self.completion_times: list[float] = []
+        self.completion_cycle_times: list[float] = []
 
     def emit(self, event: dict[str, Any]) -> None:
         if self.listener is not None:
