@@ -218,3 +218,42 @@ def test_detached_session_is_evicted_for_new_user() -> None:
         with c.websocket_connect("/ws/session?scenario=battery_line") as ws:
             hello = ws.receive_json()
             assert hello["type"] == "hello" and hello["session"] != first
+
+
+def test_optimizer_defaults_and_job(client: TestClient) -> None:
+    defaults = client.get("/api/scenarios/battery_line/optimizer-defaults").json()
+    keys = [v["key"] for v in defaults["variables"]]
+    assert "station.weld.servers" in keys and "buffer.B2.capacity" in keys
+    body = {
+        "scenario_id": "battery_line",
+        "variables": [
+            {"key": "station.weld.servers", "low": 1, "high": 2},
+            {"key": "buffer.B2.capacity", "low": 3, "high": 12},
+        ],
+        "trials": 4,
+        "replications": 2,
+        "horizon": 14400,
+    }
+    r = client.post("/api/optimizations", json=body)
+    assert r.status_code == 202, r.text
+    job = wait_job(client, r.json()["job_id"], timeout=180)
+    assert job["status"] == "done", job
+    res = job["result"]
+    assert len(res["trials"]) == 4
+    assert res["best"]["profit"]["mean"] >= res["baseline"]["profit"]["mean"]
+    assert res["pareto"]
+
+
+@pytest.mark.parametrize(
+    "variables",
+    [
+        [{"key": "station.weld.process_time", "low": 1, "high": 2}],
+        [{"key": "station.weld.servers", "low": 3, "high": 1}],
+        [{"key": "station.weld.servers", "low": 1, "high": 99}],
+        [{"key": "buffer.NOPE.capacity", "low": 1, "high": 2}],
+        [{"key": "station.weld.servers", "low": 1, "high": 2}, {"key": "station.weld.servers", "low": 1, "high": 2}],
+    ],
+)
+def test_optimizer_rejects_bad_variables(client: TestClient, variables: list[dict[str, Any]]) -> None:
+    r = client.post("/api/optimizations", json={"scenario_id": "battery_line", "variables": variables, "trials": 3})
+    assert r.status_code == 422

@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from experiments.optimizer import Economics, Variable
+
 OverrideValue = Annotated[float, Field(allow_inf_nan=False)]
 Overrides = Annotated[dict[Annotated[str, Field(max_length=80)], OverrideValue], Field(max_length=50)]
 
@@ -79,6 +81,17 @@ class ComparisonRequest(_Strict):
     a_overrides: Overrides = Field(default_factory=dict)
     b_overrides: Overrides = Field(default_factory=dict)
     replications: int = Field(default=10, ge=2)
+    base_seed: int = Field(default=1, ge=0, le=2**31 - 1_000)
+    horizon: float | None = Field(default=None, gt=0)
+    warmup: float | None = Field(default=None, ge=0)
+
+
+class OptimizationRequest(_Strict):
+    scenario_id: str = Field(max_length=40)
+    variables: list[Variable] = Field(min_length=1, max_length=12)
+    economics: Economics = Field(default_factory=Economics)
+    trials: int = Field(default=30, ge=3)
+    replications: int = Field(default=3, ge=1, le=10)
     base_seed: int = Field(default=1, ge=0, le=2**31 - 1_000)
     horizon: float | None = Field(default=None, gt=0)
     warmup: float | None = Field(default=None, ge=0)

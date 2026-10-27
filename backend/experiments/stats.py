@@ -84,15 +84,36 @@ def binned_means(
     return [float(s / c) if c else None for s, c in zip(sums, counts, strict=True)]
 
 
-def welch_warmup(
-    series: Sequence[Sequence[float | None]], bin_seconds: float, window: int = 3, tolerance: float = 0.05
-) -> WarmupAnalysis:
-    """Welch's graphical method, automated.
+def mser_truncation(series: Sequence[float | None]) -> int | None:
+    """MSER truncation point (White, 1997) for a batched output series.
 
-    Average the per-bin metric across replications, smooth with a centred moving
-    average, take the mean of the second half as the steady-state level, and
-    suggest the first bin after which the smoothed curve stays within
-    ``tolerance`` of it.
+    Chooses the number of leading batches ``d`` to delete that minimises the
+    marginal standard error of the remaining mean::
+
+        MSER(d) = sum_{i>=d} (Y_i - mean(Y_d..))^2 / (n - d)^2
+
+    restricted to ``d <= n/2`` so at least half of the run is kept.
+    """
+    y = np.array([v for v in series if v is not None], dtype=float)
+    n = len(y)
+    if n < 6:
+        return None
+    best_d, best = 0, math.inf
+    for d in range(n // 2 + 1):
+        tail = y[d:]
+        score = float(((tail - tail.mean()) ** 2).sum()) / (n - d) ** 2
+        if score < best:
+            best_d, best = d, score
+    return best_d
+
+
+def welch_warmup(series: Sequence[Sequence[float | None]], bin_seconds: float, window: int = 3) -> WarmupAnalysis:
+    """Warm-up analysis over replications.
+
+    The replication-averaged per-bin metric is smoothed with Welch's centred
+    moving average for plotting; the suggested warm-up comes from MSER applied
+    to the averaged series, which is robust to the noise that makes a fixed
+    tolerance band unreliable.
     """
     n_bins = max((len(s) for s in series), default=0)
     mean_series: list[float | None] = []
@@ -107,20 +128,12 @@ def welch_warmup(
         smoothed.append(float(np.mean(window_vals)) if window_vals else None)
 
     bins = [(i + 1) * bin_seconds for i in range(n_bins)]
-    tail = [v for v in smoothed[n_bins // 2 :] if v is not None]
-    if not tail:
-        return WarmupAnalysis(
-            bin_seconds=bin_seconds, window=window, bins=bins, mean_series=mean_series, smoothed=smoothed,
-            suggested_warmup=None, steady_state=None,
-        )  # fmt: skip
-    steady = float(np.mean(tail))
-    suggested: float | None = None
-    for i in range(n_bins):
-        rest = [v for v in smoothed[i:] if v is not None]
-        if rest and all(abs(v - steady) <= tolerance * abs(steady) for v in rest):
-            suggested = i * bin_seconds
-            break
+    # Map the MSER index (over non-empty bins) back to a time.
+    present = [i for i, v in enumerate(mean_series) if v is not None]
+    d = mser_truncation(mean_series)
+    suggested = present[d] * bin_seconds if d is not None and present else None
+    tail = [v for v in mean_series[present[d] :] if v is not None] if d is not None and present else []
     return WarmupAnalysis(
         bin_seconds=bin_seconds, window=window, bins=bins, mean_series=mean_series, smoothed=smoothed,
-        suggested_warmup=suggested, steady_state=steady,
+        suggested_warmup=suggested, steady_state=float(np.mean(tail)) if tail else None,
     )  # fmt: skip

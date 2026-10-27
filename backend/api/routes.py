@@ -9,13 +9,21 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import Response
 
+from experiments.optimizer import Economics, default_variables, optimize, validate_variables
 from experiments.runner import compare, summarize
 from sim import Scenario, apply_overrides, list_scenarios, load_scenario
 from sim.config import OverrideError
 from sim.kpi import Kpis
 
 from .jobs import JobManager, ProgressFn, TooManyJobsError
-from .schemas import ComparisonRequest, ExperimentRequest, JobAccepted, RunRequest, ScenarioSummary
+from .schemas import (
+    ComparisonRequest,
+    ExperimentRequest,
+    JobAccepted,
+    OptimizationRequest,
+    RunRequest,
+    ScenarioSummary,
+)
 from .settings import Settings
 
 router = APIRouter(prefix="/api")
@@ -91,6 +99,16 @@ async def scenario_detail(scenario_id: ScenarioId) -> dict[str, Any]:
     return _scenario(scenario_id).model_dump(mode="json")
 
 
+@router.get("/scenarios/{scenario_id}/optimizer-defaults")
+async def optimizer_defaults(scenario_id: ScenarioId, request: Request) -> dict[str, Any]:
+    scenario = _scenario(scenario_id)
+    return {
+        "variables": default_variables(scenario),
+        "economics": Economics().model_dump(),
+        "max_trials": _settings(request).max_optimizer_trials,
+    }
+
+
 @router.post("/runs")
 async def single_run(body: RunRequest, request: Request) -> Kpis:
     """Run one replication synchronously (in the worker pool) and return its KPIs."""
@@ -137,6 +155,38 @@ async def start_comparison(body: ComparisonRequest, request: Request) -> JobAcce
         return out
 
     return _submit(jobs, "comparison", work)
+
+
+@router.post("/optimizations", status_code=202)
+async def start_optimization(body: OptimizationRequest, request: Request) -> JobAccepted:
+    settings, jobs = _settings(request), _jobs(request)
+    if body.trials > settings.max_optimizer_trials:
+        raise HTTPException(422, f"trials must be at most {settings.max_optimizer_trials}")
+    scenario = _scenario(body.scenario_id)
+    horizon, warmup = _run_window(settings, scenario, body.horizon, body.warmup)
+    try:
+        validate_variables(scenario, body.variables)
+    except ValueError as exc:  # OverrideError or duplicate keys
+        raise HTTPException(422, str(exc)) from None
+    seeds = list(range(body.base_seed, body.base_seed + body.replications))
+
+    async def work(progress: ProgressFn) -> dict[str, Any]:
+        async def evaluate(candidate: Scenario, run_seeds: list[int]) -> list[Any]:
+            return await jobs.map_replications(candidate, run_seeds, horizon, warmup)
+
+        result = await optimize(
+            scenario,
+            body.variables,
+            body.economics,
+            body.trials,
+            seeds,
+            evaluate,
+            progress,
+            sampler_seed=body.base_seed,
+        )
+        return result.model_dump(mode="json")
+
+    return _submit(jobs, "optimization", work)
 
 
 @router.get("/jobs/{job_id}")

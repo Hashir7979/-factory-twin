@@ -220,3 +220,98 @@ export type ClientCmd =
   | { type: "reset"; overrides: Overrides; seed?: number }
   | { type: "inject_failure"; machine: string; repair_time?: number }
   | { type: "snapshot" };
+
+// --------------------------------------------------------------------------- experiments
+
+export interface Estimate {
+  mean: number;
+  half_width: number;
+  std: number;
+  min: number;
+  max: number;
+  n: number;
+}
+
+export interface WarmupAnalysis {
+  bin_seconds: number;
+  window: number;
+  bins: number[];
+  mean_series: (number | null)[];
+  smoothed: (number | null)[];
+  suggested_warmup: number | null;
+  steady_state: number | null;
+}
+
+export interface ExperimentResult {
+  scenario_id: string;
+  overrides: Overrides;
+  horizon: number;
+  warmup: number;
+  seeds: number[];
+  metrics: Record<string, Estimate>;
+  stations: Record<string, Record<string, Estimate>>;
+  buffers: Record<string, Record<string, Estimate>>;
+  bottleneck_frequency: Record<string, number>;
+  warmup_analysis: WarmupAnalysis;
+  runs: LineKpi[];
+}
+
+export interface Difference {
+  metric: string;
+  a: Estimate;
+  b: Estimate;
+  diff: Estimate;
+  relative: number | null;
+  significant: boolean;
+}
+
+export interface ComparisonResult {
+  a: ExperimentResult;
+  b: ExperimentResult;
+  differences: Difference[];
+  labels: { a: string; b: string };
+}
+
+export interface OptVariable {
+  key: string;
+  low: number;
+  high: number;
+}
+
+export interface Economics {
+  margin_per_part: number;
+  machine_cost_per_hour: number;
+  station_machine_cost_per_hour: Record<string, number>;
+  buffer_slot_cost_per_hour: number;
+  technician_cost_per_hour: number;
+  operator_cost_per_hour: number;
+}
+
+export interface Evaluation {
+  params: Record<string, number>;
+  throughput: Estimate;
+  revenue_per_hour: number;
+  cost_per_hour: number;
+  profit: Estimate;
+  costs: { machines: number; buffers: number; technicians: number; operators: number };
+  bottleneck: string | null;
+}
+
+export interface OptimizationResult {
+  scenario_id: string;
+  variables: OptVariable[];
+  economics: Economics;
+  seeds: number[];
+  baseline: Evaluation;
+  best: Evaluation;
+  trials: { number: number; evaluation: Evaluation; cached: boolean }[];
+  pareto: number[];
+  confirmation: {
+    seeds: number[];
+    baseline: Evaluation;
+    candidates: Evaluation[];
+    profit_difference: Difference | null;
+    significant: boolean;
+  };
+  improvement_per_hour: number;
+}

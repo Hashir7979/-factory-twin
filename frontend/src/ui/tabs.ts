@@ -1,5 +1,5 @@
 /** WAI-ARIA tabs: click or arrow keys switch panels; only the active tab is in the tab order. */
-export function initTabs(root: HTMLElement, onChange?: (id: string) => void): void {
+export function initTabs(root: HTMLElement, onChange?: (id: string) => void): (id: string) => void {
   const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
   const select = (tab: HTMLButtonElement, focus: boolean) => {
     for (const t of tabs) {
@@ -26,4 +26,8 @@ export function initTabs(root: HTMLElement, onChange?: (id: string) => void): vo
       }
     });
   });
+  return (id: string) => {
+    const tab = tabs.find((t) => t.id === id);
+    if (tab) select(tab, false);
+  };
 }

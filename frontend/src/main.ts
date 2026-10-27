@@ -10,6 +10,8 @@ import { KpiPanel } from "./ui/kpis";
 import { TrendChart } from "./ui/charts";
 import { SettingsForm } from "./ui/settings";
 import { StateTimeline } from "./ui/timeline";
+import { ExperimentsPanel } from "./ui/experiments";
+import { OptimizerPanel } from "./ui/optimizer";
 import { initTabs } from "./ui/tabs";
 import { toast } from "./ui/toast";
 
@@ -25,6 +27,9 @@ class App {
   private readonly timeline: StateTimeline;
   private readonly inspector: Inspector;
   private readonly settings: SettingsForm;
+  private readonly experiments: ExperimentsPanel;
+  private readonly optimizer: OptimizerPanel;
+  private readonly selectTab: (id: string) => void;
 
   private scenarioId = "";
   private baseScenario: Scenario | null = null;
@@ -62,7 +67,25 @@ class App {
     this.timeline = new StateTimeline(byId<HTMLCanvasElement>("timeline"));
     this.inspector = new Inspector(byId("inspector"));
     this.settings = new SettingsForm(byId("settings"));
-    initTabs(byId("panel"));
+    this.experiments = new ExperimentsPanel(byId("experiments"), {
+      scenario: () => this.baseScenario,
+      overrides: () => this.settings.currentOverrides(),
+    });
+    this.optimizer = new OptimizerPanel(byId("optimizer"), {
+      scenario: () => this.baseScenario,
+      apply: (overrides) => {
+        if (!this.socket.send({ type: "reset", overrides, seed: this.seed })) {
+          toast("Not connected.", "error");
+          return;
+        }
+        this.selectTab("tab-live");
+        toast("Live run restarted with the optimized configuration.", "success");
+      },
+    });
+    this.selectTab = initTabs(byId("panel"), (id) => {
+      if (id === "tab-experiments") this.experiments.refresh();
+      if (id === "tab-optimize") void this.optimizer.refresh();
+    });
     this.bind();
     requestAnimationFrame((t) => this.loop(t));
   }

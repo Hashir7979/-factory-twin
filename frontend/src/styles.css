@@ -747,6 +747,61 @@ input[type="range"] {
   transition: width 0.3s;
 }
 
+.subhead {
+  font-size: 13px;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.plain-list {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+.field.checkbox {
+  grid-template-columns: 1fr auto;
+}
+.field.checkbox input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.opt-vars input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.opt-vars .range-cell {
+  width: 72px;
+}
+.opt-vars input[type="number"] {
+  padding: 4px 6px;
+  min-height: 30px;
+}
+.job-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.job-control p {
+  margin: 0;
+}
+.spaced {
+  margin-top: var(--space-3);
+}
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.good-text {
+  color: var(--success);
+}
+.warn-text {
+  color: var(--warn);
+}
+@media (prefers-color-scheme: light) {
+  .good-text { color: #15803d; }
+  .warn-text { color: #a16207; }
+}
 .result-table td.good {
   color: var(--success);
 }

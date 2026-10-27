@@ -1,4 +1,4 @@
-import type { Overrides, Scenario, ScenarioSummary } from "../types";
+import type { Economics, OptVariable, Overrides, Scenario, ScenarioSummary } from "../types";
 import { httpBase } from "./config";
 
 export class ApiError extends Error {
@@ -63,6 +63,11 @@ export const api = {
   scenarios: () => request<ScenarioSummary[]>("/api/scenarios"),
 
   scenario: (id: string) => request<Scenario>(`/api/scenarios/${encodeURIComponent(id)}`),
+
+  optimizerDefaults: (id: string) =>
+    request<{ variables: OptVariable[]; economics: Economics; max_trials: number }>(
+      `/api/scenarios/${encodeURIComponent(id)}/optimizer-defaults`,
+    ),
 
   startExperiment: (body: {
     scenario_id: string;
