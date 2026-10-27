@@ -19,7 +19,7 @@ def test_battery_line_conservation_and_capacity(battery: Scenario) -> None:
     model = run(battery)
     mon = model.monitor
     in_system = len(model.products)
-    assert mon.total_created == mon.total_completed + mon.total_scrapped + in_system
+    assert mon.total_created == mon.total_exited + in_system
     assert mon.wip.value == in_system
     # Every product in the system is in exactly one place: a buffer or a machine.
     located = [p.id for b in model.buffers.values() for p in b.contents()]
@@ -95,7 +95,7 @@ def test_injected_failure_on_idle_machine_loses_no_parts() -> None:
     assert model.monitor.total_completed == 3
     model.env.run(until=1_000)
     mon = model.monitor
-    assert mon.total_created == mon.total_completed + len(model.products)
+    assert mon.total_created == mon.total_exited + len(model.products)
 
 
 def test_operator_pool_is_shared_constraint() -> None:
@@ -191,5 +191,5 @@ def test_every_bundled_scenario_runs_and_conserves_parts(scenario_id: str) -> No
     model.run(horizon=7_200, warmup=600)
     mon = model.monitor
     assert mon.total_completed > 0
-    assert mon.total_created == mon.total_completed + mon.total_scrapped + len(model.products)
+    assert mon.total_created == mon.total_exited + len(model.products)
     assert compute_kpis(model).bottleneck.station is not None

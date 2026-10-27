@@ -63,6 +63,8 @@ class BufferKpi(BaseModel):
     mean_level: float
     max_level: float
     mean_wait: float
+    # Waiting after travel is complete (queueing at the consumer), e.g. trucks at the excavator.
+    mean_queue_delay: float
     fill_pct: float | None
 
 
@@ -76,6 +78,8 @@ class LineKpi(BaseModel):
     wip: int
     mean_wip: float
     throughput_per_hour: float
+    # Throughput in the scenario's output unit (e.g. m³/h when each truck load is 18 m³).
+    output_units_per_hour: float
     mean_cycle_time: float
     cycle_time_std: float
     first_pass_yield: float
@@ -162,13 +166,19 @@ def compute_kpis(model: FactoryModel) -> Kpis:
             mean_level=b.level.mean(now),
             max_level=b.level.max,
             mean_wait=b.wait.mean,
+            mean_queue_delay=b.queue_delay.mean,
             fill_pct=_pct(b.level.mean(now), b.cfg.capacity) if b.cfg.capacity else None,
         )
         for b in model.buffers.values()
     ]
 
     bottleneck = detect_bottleneck(model, stations)
-    bn_station = next((s for s in stations if s.id == bottleneck.station), None)
+    # A closed network can be limited by its fleet rather than a station; then the
+    # busiest station's OEE stands for the line.
+    bn_id = (
+        bottleneck.ranking[0].station if bottleneck.station == "fleet" and bottleneck.ranking else bottleneck.station
+    )
+    bn_station = next((s for s in stations if s.id == bn_id), None)
 
     line = LineKpi(
         sim_time=now,
@@ -180,6 +190,7 @@ def compute_kpis(model: FactoryModel) -> Kpis:
         wip=int(mon.wip.value),
         mean_wip=mon.wip.mean(now),
         throughput_per_hour=_pct(mon.completed, observed) * 3600,
+        output_units_per_hour=_pct(mon.completed, observed) * 3600 * model.scenario.units_per_output,
         mean_cycle_time=mon.cycle_time.mean,
         cycle_time_std=mon.cycle_time.std,
         first_pass_yield=fpy,

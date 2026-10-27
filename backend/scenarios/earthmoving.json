@@ -1,0 +1,54 @@
+{
+  "id": "earthmoving",
+  "name": "Earthmoving: Excavator & Truck Fleet",
+  "description": "Cut-to-fill earthmoving operation modelled as a closed loop: a fleet of 18 m³ dump trucks cycles between one excavator, a loaded haul road, the dump and spread area, and an empty return road. Travel and loading times are random and the excavator breaks down occasionally. The classic question is how many trucks to assign: too few and the excavator waits, too many and trucks queue.",
+  "entity": "truck",
+  "output_station": "dump",
+  "output_unit": "m³",
+  "units_per_output": 18,
+  "variants": [
+    {"id": "T18", "name": "18 m³ dump truck", "weight": 1, "color": "#facc15"}
+  ],
+  "source": {
+    "id": "yard",
+    "name": "Truck Yard",
+    "interarrival": {"type": "constant", "value": 60},
+    "output": "R_return",
+    "max_arrivals": 4,
+    "pos": [-2, 13]
+  },
+  "buffers": [
+    {"id": "R_haul", "name": "Haul Road (loaded)", "kind": "road", "capacity": 20,
+     "transit": {"type": "lognormal", "mean": 330, "std": 60},
+     "pos": [0, -7], "path": [[-11, -2], [-6, -7], [6, -7], [11, -2]]},
+    {"id": "R_return", "name": "Return Road (empty)", "kind": "road", "capacity": 20,
+     "transit": {"type": "lognormal", "mean": 240, "std": 45},
+     "pos": [0, 7], "path": [[11, 2], [6, 7], [-6, 7], [-11, 2]]}
+  ],
+  "stations": [
+    {
+      "id": "load", "name": "Excavator", "model": "excavator", "input": "R_return", "output": "R_haul",
+      "process_time": {"type": "lognormal", "mean": 170, "std": 35},
+      "failure": {"ttf": {"type": "exponential", "mean": 18000},
+                  "ttr": {"type": "lognormal", "mean": 2400, "std": 1200}},
+      "pos": [-15, 0]
+    },
+    {
+      "id": "dump", "name": "Dump & Spread", "model": "dump", "input": "R_haul", "output": "R_return",
+      "process_time": {"type": "triangular", "low": 40, "mode": 60, "high": 100},
+      "pos": [15, 0]
+    }
+  ],
+  "resources": {"technicians": 1, "operators": 0},
+  "economics": {
+    "margin_per_part": 99,
+    "machine_cost_per_hour": 0,
+    "station_machine_cost_per_hour": {"load": 165, "dump": 95},
+    "buffer_slot_cost_per_hour": 0,
+    "technician_cost_per_hour": 55,
+    "operator_cost_per_hour": 0,
+    "fleet_cost_per_hour": 88
+  },
+  "sink": {"pos": [18, 10]},
+  "run": {"horizon": 36000, "warmup": 1800, "seed": 11}
+}

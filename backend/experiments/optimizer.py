@@ -21,6 +21,7 @@ import optuna
 from pydantic import BaseModel, Field, model_validator
 
 from sim import Scenario, apply_overrides
+from sim.config import Economics
 
 from .runner import ReplicationResult
 from .stats import Difference, Estimate, estimate, paired_difference
@@ -28,16 +29,9 @@ from .stats import Difference, Estimate, estimate, paired_difference
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 log = logging.getLogger("factory.optimizer")
 
-INTEGER_KEYS = ("buffer.", "station.", "resources.")
+INTEGER_KEYS = ("buffer.", "station.", "resources.", "source.max_arrivals")
 
-
-class Economics(BaseModel):
-    margin_per_part: float = Field(default=180.0, ge=0, le=1e6)
-    machine_cost_per_hour: float = Field(default=45.0, ge=0, le=1e5)
-    station_machine_cost_per_hour: dict[str, float] = Field(default_factory=dict, max_length=100)
-    buffer_slot_cost_per_hour: float = Field(default=0.5, ge=0, le=1e4)
-    technician_cost_per_hour: float = Field(default=48.0, ge=0, le=1e5)
-    operator_cost_per_hour: float = Field(default=38.0, ge=0, le=1e5)
+__all__ = ["Economics", "Variable", "optimize"]
 
 
 class Variable(BaseModel):
@@ -59,10 +53,11 @@ class CostBreakdown(BaseModel):
     buffers: float
     technicians: float
     operators: float
+    fleet: float = 0.0
 
     @property
     def total(self) -> float:
-        return self.machines + self.buffers + self.technicians + self.operators
+        return self.machines + self.buffers + self.technicians + self.operators + self.fleet
 
 
 class Evaluation(BaseModel):
@@ -121,6 +116,7 @@ def cost_per_hour(scenario: Scenario, econ: Economics) -> CostBreakdown:
         buffers=slots * econ.buffer_slot_cost_per_hour,
         technicians=(res.technicians or 0) * econ.technician_cost_per_hour,
         operators=res.operators * econ.operator_cost_per_hour,
+        fleet=(scenario.source.max_arrivals or 0) * econ.fleet_cost_per_hour if scenario.is_closed else 0.0,
     )
 
 
@@ -153,6 +149,8 @@ def baseline_params(scenario: Scenario, variables: list[Variable]) -> dict[str, 
         elif kind == "station":
             node, field = rest.split(".", 1)
             out[v.key] = int(getattr(scenario.station(node), field))
+        elif kind == "source":
+            out[v.key] = int(getattr(scenario.source, rest) or 0)
         else:
             out[v.key] = int(getattr(scenario.resources, rest) or 0)
     return out
@@ -308,10 +306,17 @@ async def optimize(
 def default_variables(scenario: Scenario) -> list[dict[str, Any]]:
     """Sensible search space around the current configuration (used by the UI)."""
     out: list[dict[str, Any]] = []
+    if scenario.is_closed and scenario.source.max_arrivals:
+        # Fleet size is the classic decision in closed networks ("how many trucks?").
+        # Its ceiling is the smallest buffer, which must hold the whole fleet.
+        n = scenario.source.max_arrivals
+        ceiling = min([b.capacity for b in scenario.buffers if b.capacity] or [500])
+        out.append({"key": "source.max_arrivals", "low": max(1, n - 3), "high": min(ceiling, n + 4)})
     for st in scenario.stations:
         out.append({"key": f"station.{st.id}.servers", "low": max(1, st.servers - 1), "high": min(20, st.servers + 1)})
     for b in scenario.buffers:
-        if b.capacity:
+        # Road / conveyor sizes in a closed loop are not design levers.
+        if b.capacity and not scenario.is_closed:
             out.append(
                 {"key": f"buffer.{b.id}.capacity", "low": max(1, b.capacity // 2), "high": min(10_000, b.capacity * 2)}
             )

@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 # Gap (in active-percentage points) between the top two stations below which
 # the result is reported as "shifting" rather than a single clear bottleneck.
 MARGINAL_GAP = 0.03
+# Closed networks: if the busiest station waits for work at least this share of
+# the time, the circulating fleet (not a station) limits output. Between the two
+# thresholds the system is balanced around the best fleet size.
+FLEET_LIMITED_STARVED = 0.15
+FLEET_BALANCED_STARVED = 0.05
 
 
 class BottleneckRank(BaseModel):
@@ -34,7 +39,9 @@ class BottleneckRank(BaseModel):
 
 
 class BottleneckReport(BaseModel):
+    # A station id, "fleet" (closed networks with too few circulating units) or None.
     station: str | None
+    label: str | None = None  # human-readable name of the constraint
     confidence: Literal["clear", "shifting", "none"]
     ranking: list[BottleneckRank]
     upstream_blocked_pct: float | None
@@ -88,6 +95,9 @@ def detect_bottleneck(model: FactoryModel, stations: list[StationKpi]) -> Bottle
         if i + 1 < len(route):
             down = by_id[route[i + 1]].starved_pct
 
+    if model.scenario.is_closed:
+        return _closed_network_report(model, by_id[top.station], ranking, up, down)
+
     if confidence == "clear":
         explanation = (
             f"{top.name} is active {top.active_pct:.0%} of the time, "
@@ -99,9 +109,52 @@ def detect_bottleneck(model: FactoryModel, stations: list[StationKpi]) -> Bottle
         )
     return BottleneckReport(
         station=top.station,
+        label=top.name,
         confidence=confidence,
         ranking=ranking,
         upstream_blocked_pct=up,
         downstream_starved_pct=down,
         explanation=explanation,
+    )
+
+
+def _closed_network_report(
+    model: FactoryModel, top: StationKpi, ranking: list[BottleneckRank], up: float | None, down: float | None
+) -> BottleneckReport:
+    """In a loop, starvation at the busiest station means too few circulating units."""
+    plural = f"{model.scenario.entity}s"
+    starved = top.starved_pct
+    queue = model.buffers[model.scenario.station(top.id).input].queue_delay.mean
+    common = {"ranking": ranking, "upstream_blocked_pct": up, "downstream_starved_pct": down}
+    if starved >= FLEET_LIMITED_STARVED:
+        return BottleneckReport(
+            station="fleet",
+            label=f"{model.scenario.entity.capitalize()} fleet",
+            confidence="clear",
+            explanation=(
+                f"Too few {plural}: {top.name}, the busiest station, waits for {plural} {starved:.0%} of the time. "
+                f"Adding {plural} raises output."
+            ),
+            **common,
+        )
+    if starved >= FLEET_BALANCED_STARVED:
+        return BottleneckReport(
+            station=top.id,
+            label=top.name,
+            confidence="shifting",
+            explanation=(
+                f"Balanced: {top.name} waits for {plural} {starved:.0%} of the time while {plural} queue "
+                f"{queue / 60:.1f} min on average at it. The fleet size is close to the best match."
+            ),
+            **common,
+        )
+    return BottleneckReport(
+        station=top.id,
+        label=top.name,
+        confidence="clear",
+        explanation=(
+            f"{top.name} is active {top.active_pct:.0%} of the time and {plural} queue {queue / 60:.1f} min on "
+            f"average to reach it. More {plural} would add cost, not output."
+        ),
+        **common,
     )

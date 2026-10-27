@@ -137,23 +137,36 @@ class Buffer(_Strict):
     name: str = Field(max_length=60)
     # None = unbounded (useful for analytic validation; unrealistic on a real floor)
     capacity: int | None = Field(default=None, ge=1, le=10_000)
-    kind: Literal["queue", "conveyor"] = "queue"
-    # Minimum time a part spends travelling on a conveyor before it can be picked.
+    # "conveyor" and "road" behave identically (FIFO travel, no overtaking); they
+    # differ only in how the 3D view draws them.
+    kind: Literal["queue", "conveyor", "road"] = "queue"
+    # Minimum time a part spends travelling before it can be picked.
     transit_time: float = Field(default=0.0, ge=0)
+    # Random travel time (e.g. truck haul times); overrides transit_time when set.
+    transit: Distribution | None = None
     pos: Point = (0.0, 0.0)
-    # Conveyor centreline for the 3D view; ignored for queues.
+    # Centreline for the 3D view; ignored for queues.
     path: list[Point] | None = None
+
+    @property
+    def is_travel(self) -> bool:
+        return self.kind in ("conveyor", "road")
 
     @model_validator(mode="after")
     def _check(self) -> Buffer:
-        if self.kind == "conveyor":
-            if self.transit_time <= 0:
-                raise ValueError(f"buffer {self.id}: conveyor requires transit_time > 0")
+        if self.is_travel:
+            if self.transit_time <= 0 and self.transit is None:
+                raise ValueError(f"buffer {self.id}: {self.kind} requires transit_time > 0 or a transit distribution")
             if self.capacity is None:
-                raise ValueError(f"buffer {self.id}: conveyor requires a finite capacity")
+                raise ValueError(f"buffer {self.id}: {self.kind} requires a finite capacity")
             if not self.path or len(self.path) < 2:
-                raise ValueError(f"buffer {self.id}: conveyor requires a path of >= 2 points")
+                raise ValueError(f"buffer {self.id}: {self.kind} requires a path of >= 2 points")
+        elif self.transit is not None or self.transit_time > 0:
+            raise ValueError(f"buffer {self.id}: only conveyors and roads have travel times")
         return self
+
+    def mean_transit(self) -> float:
+        return float(self.transit.mean) if self.transit is not None else self.transit_time
 
 
 class Failure(_Strict):
@@ -201,6 +214,8 @@ class Station(_Strict):
     failure: Failure | None = None
     needs_operator: bool = False
     qc: QualityCheck | None = None
+    # 3D appearance only.
+    model: Literal["machine", "excavator", "dump"] = "machine"
     pos: Point = (0.0, 0.0)
 
     @model_validator(mode="after")
@@ -240,6 +255,19 @@ class RunDefaults(_Strict):
         return self
 
 
+class Economics(_Strict):
+    """Cost model for the optimizer (per hour). Scenarios ship their own defaults."""
+
+    margin_per_part: float = Field(default=180.0, ge=0, le=1e6)  # revenue per unit of output
+    machine_cost_per_hour: float = Field(default=45.0, ge=0, le=1e5)
+    station_machine_cost_per_hour: dict[str, float] = Field(default_factory=dict, max_length=100)
+    buffer_slot_cost_per_hour: float = Field(default=0.5, ge=0, le=1e4)
+    technician_cost_per_hour: float = Field(default=48.0, ge=0, le=1e5)
+    operator_cost_per_hour: float = Field(default=38.0, ge=0, le=1e5)
+    # Per circulating unit in a closed network (e.g. a truck including its driver).
+    fleet_cost_per_hour: float = Field(default=0.0, ge=0, le=1e5)
+
+
 class Scenario(_Strict):
     id: NodeId
     name: str = Field(max_length=80)
@@ -251,6 +279,18 @@ class Scenario(_Strict):
     resources: Resources = Resources()
     sink: Sink = Sink()
     run: RunDefaults = RunDefaults()
+    economics: Economics = Economics()
+    # What the moving entities are, for the 3D view and UI wording.
+    entity: Literal["part", "truck"] = "part"
+    # Closed networks (no sink: a fixed fleet circulates, e.g. trucks) count
+    # production when an entity completes this station.
+    output_station: NodeId | None = None
+    output_unit: str = Field(default="parts", max_length=20)
+    units_per_output: float = Field(default=1.0, gt=0, le=1e6)
+
+    @property
+    def is_closed(self) -> bool:
+        return not any(st.output == SINK_ID for st in self.stations)
 
     @model_validator(mode="after")
     def _check_graph(self) -> Scenario:
@@ -287,8 +327,21 @@ class Scenario(_Strict):
             n = len(consumers.get(b.id, []))
             if n != 1:
                 raise ValueError(f"buffer {b.id}: must feed exactly one station (found {n})")
-        if not any(st.output == SINK_ID for st in self.stations):
-            raise ValueError("at least one station must output to 'sink'")
+        if self.is_closed:
+            fleet = self.source.max_arrivals
+            if fleet is None:
+                raise ValueError(
+                    "a closed network (no station outputs to 'sink') needs source.max_arrivals (fleet size)"
+                )
+            if self.output_station is None or self.output_station not in {s.id for s in self.stations}:
+                raise ValueError("a closed network needs output_station set to an existing station")
+            # If every buffer could fill up the fleet could jam itself; requiring each
+            # buffer to hold the whole fleet makes deadlock impossible.
+            small = [b.id for b in self.buffers if b.capacity is not None and b.capacity < fleet]
+            if small:
+                raise ValueError(f"closed network: buffers {small} must hold the whole fleet ({fleet})")
+        elif self.output_station is not None:
+            raise ValueError("output_station is only used by closed networks (no station outputs to 'sink')")
         return self
 
     # Convenience lookups -----------------------------------------------------------
@@ -309,6 +362,7 @@ OVERRIDABLE = {
     "resources.technicians": (1, 100),
     "resources.operators": (0, 200),
     "source.interarrival_scale": (0.1, 10.0),
+    "source.max_arrivals": (1, 500),
 }
 
 
@@ -322,7 +376,8 @@ def apply_overrides(scenario: Scenario, overrides: dict[str, Any]) -> Scenario:
     Keys: ``buffer.<id>.capacity``, ``station.<id>.servers``,
     ``resources.technicians``, ``resources.operators``,
     ``source.interarrival_scale`` (multiplies every time parameter of the
-    inter-arrival distribution, i.e. scales demand).
+    inter-arrival distribution, i.e. scales demand), ``source.max_arrivals``
+    (fleet size in closed networks).
     """
     data = copy.deepcopy(scenario.model_dump(mode="json"))
     for key, raw in overrides.items():
@@ -339,6 +394,8 @@ def apply_overrides(scenario: Scenario, overrides: dict[str, Any]) -> Scenario:
             rule, target, attr = key, data["resources"], parts[1]
         elif key == "source.interarrival_scale":
             rule, target, attr = key, None, ""
+        elif key == "source.max_arrivals":
+            rule, target, attr = key, data["source"], "max_arrivals"
         else:
             raise OverrideError(f"override '{key}' is not allowed")
         if rule not in OVERRIDABLE:

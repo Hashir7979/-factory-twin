@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import Response
 
-from experiments.optimizer import Economics, default_variables, optimize, validate_variables
+from experiments.optimizer import default_variables, optimize, validate_variables
 from experiments.runner import compare, summarize
 from sim import Scenario, apply_overrides, list_scenarios, load_scenario
 from sim.config import OverrideError
@@ -104,7 +104,7 @@ async def optimizer_defaults(scenario_id: ScenarioId, request: Request) -> dict[
     scenario = _scenario(scenario_id)
     return {
         "variables": default_variables(scenario),
-        "economics": Economics().model_dump(),
+        "economics": scenario.economics.model_dump(),
         "max_trials": _settings(request).max_optimizer_trials,
     }
 
@@ -177,7 +177,7 @@ async def start_optimization(body: OptimizationRequest, request: Request) -> Job
         result = await optimize(
             scenario,
             body.variables,
-            body.economics,
+            body.economics or scenario.economics,
             body.trials,
             seeds,
             evaluate,

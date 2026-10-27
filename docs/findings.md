@@ -100,4 +100,24 @@ Same engine and schema, different industry and layout (U-shaped flow, L-shaped c
 
 Reading: the center ships about as fast as orders arrive (180/h), so an extra packing bench adds little throughput. It does cut order lead time and WIP sharply by removing packing queues; an extra picker changes nothing because picking is not the constraint.
 
-_Runtime: 23 s on 4 CPU cores._
+## 7. Third scenario: earthmoving fleet sizing (closed network)
+
+A fleet of 18 m³ trucks cycles excavator → loaded haul → dump → empty return. Unlike the lines above, nothing leaves the system: production counts each dump, and cycle time is a truck's round trip. Truck €88/h, excavator €165/h, dozer €95/h, revenue €99 per load. 20 replications per fleet size.
+
+| Trucks | Match factor | Production (m³/h) | Excavator utilization | Truck queue at excavator (min) | Cost (€/h) | Cost per m³ (€) | Profit (€/h) | Constraint |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 2 | 0.42 | 142 ± 5 | 38% | 1.4 | 491 | 3.45 | 292 | Truck fleet |
+| 3 | 0.63 | 209 ± 7 | 55% | 1.7 | 579 | 2.76 | 573 | Truck fleet |
+| 4 | 0.84 | 271 ± 10 | 71% | 2.2 | 667 | 2.46 | 823 | Truck fleet |
+| 5 | 1.05 | 320 ± 11 | 84% | 3.1 | 755 | 2.36 | 1003 ◀ lowest cost/m³ | Excavator |
+| 6 | 1.26 | 338 ± 12 | 89% | 5.4 | 843 | 2.50 | 1015 ◀ highest profit | Excavator |
+| 7 | 1.48 | 340 ± 12 | 89% | 8.5 | 931 | 2.74 | 936 | Excavator |
+| 8 | 1.69 | 340 ± 12 | 89% | 11.7 | 1019 | 3.00 | 848 | Excavator |
+| 9 | 1.90 | 340 ± 12 | 89% | 14.9 | 1107 | 3.26 | 760 | Excavator |
+| 10 | 2.11 | 340 ± 12 | 89% | 18.1 | 1195 | 3.52 | 672 | Excavator |
+
+The **match factor** (trucks × loading time ÷ uncongested truck cycle) is the textbook planning estimate: below 1 the excavator waits for trucks, above 1 trucks wait for the excavator. The simulation adds what the formula misses: random haul times and excavator breakdowns make trucks bunch, so the excavator still idles at a match factor near 1 and output keeps rising until about one truck beyond it.
+
+Cost per m³ is lowest at **5 trucks**. 6 trucks earns €13/h more, which is inside the replication noise (±€65/h), so 5 is the robust choice; the extra truck mostly buys cover for excavator breakdowns. Beyond that, every extra truck adds €88/h and only lengthens the queue at the excavator.
+
+_Runtime: 27 s on 4 CPU cores._

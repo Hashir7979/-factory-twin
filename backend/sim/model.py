@@ -31,7 +31,7 @@ DEFAULT_INJECTED_REPAIR = 300.0
 
 
 class Product:
-    __slots__ = ("created", "entered_at", "id", "ready_at", "reworks", "variant")
+    __slots__ = ("created", "entered_at", "id", "last_output", "ready_at", "reworks", "variant")
 
     def __init__(self, pid: int, variant: str, created: float) -> None:
         self.id = pid
@@ -40,20 +40,25 @@ class Product:
         self.reworks = 0
         self.entered_at = created
         self.ready_at = created
+        # Closed networks: when this entity last completed the output station.
+        self.last_output = created
 
 
 class BufferNode:
-    def __init__(self, env: simpy.Environment, cfg: Buffer, monitor: Monitor) -> None:
+    def __init__(self, env: simpy.Environment, cfg: Buffer, monitor: Monitor, transit: Sampler | None = None) -> None:
         self.env = env
         self.cfg = cfg
         self.id = cfg.id
         self.monitor = monitor
+        self._transit = transit
         self._store: simpy.Store = simpy.Store(env)
         # Slots are released only when a part physically leaves (after any conveyor
         # transit), so capacity is honoured while a downstream machine waits on it.
         self._space = simpy.Container(env, capacity=cfg.capacity, init=cfg.capacity) if cfg.capacity else None
         self.level = TimeWeighted(env.now)
         self.wait = Tally()
+        # Time spent queueing after travel finished (e.g. trucks waiting at the excavator).
+        self.queue_delay = Tally()
         self.entries = 0
         # Parts taken off the store by a machine but still travelling (conveyor).
         self.picked: list[Product] = []
@@ -67,7 +72,7 @@ class BufferNode:
     def deposit(self, product: Product) -> None:
         now = self.env.now
         product.entered_at = now
-        product.ready_at = now + self.cfg.transit_time
+        product.ready_at = now + (self._transit() if self._transit is not None else self.cfg.transit_time)
         self._store.put(product)
         self.level.add(now, 1)
         self.entries += 1
@@ -86,6 +91,7 @@ class BufferNode:
             self._space.put(1)
         self.level.add(now, -1)
         self.wait.add(now - product.entered_at)
+        self.queue_delay.add(max(0.0, now - product.ready_at))
         self.picked.remove(product)
 
     def contents(self) -> list[Product]:
@@ -99,6 +105,7 @@ class BufferNode:
     def reset_stats(self, t: float) -> None:
         self.level.reset(t)
         self.wait = Tally()
+        self.queue_delay = Tally()
         self.entries = 0
 
 
@@ -279,6 +286,8 @@ class Machine:
                 self._release_operator()
 
             target = self.station.route(product)
+            if self.station.is_output:
+                self.model.record_output(product)
             if target is None or target == SINK_ID:
                 self.product = None
                 self.model.retire(product, scrapped=target is None, machine=self.id)
@@ -302,6 +311,7 @@ class StationNode:
         self.id = cfg.id
         self.model = model
         self.input = model.buffers[cfg.input]
+        self.is_output = model.scenario.output_station == cfg.id
         self.passed = 0
         self.reworked = 0
         self.scrapped = 0
@@ -389,7 +399,15 @@ class FactoryModel:
         self.technicians = simpy.Resource(self.env, res.technicians) if res.technicians else None
         self.operators = simpy.Resource(self.env, res.operators) if res.operators else None
 
-        self.buffers = {b.id: BufferNode(self.env, b, self.monitor) for b in scenario.buffers}
+        self.buffers = {
+            b.id: BufferNode(
+                self.env,
+                b,
+                self.monitor,
+                make_sampler(b.transit, self.streams.rng(f"{b.id}:transit")) if b.transit is not None else None,
+            )
+            for b in scenario.buffers
+        }
         self.stations = {s.id: StationNode(self, s) for s in scenario.stations}
         self.machines = {m.id: m for st in self.stations.values() for m in st.machines}
         self.source = Source(self)
@@ -406,22 +424,36 @@ class FactoryModel:
         mon.wip.add(now, 1)
         return product
 
+    def _count_output(self, product: Product, cycle_time: float) -> None:
+        mon = self.monitor
+        mon.completed += 1
+        mon.total_completed += 1
+        mon.completion_times.append(self.env.now)
+        mon.completion_cycle_times.append(cycle_time)
+        mon.cycle_time.add(cycle_time)
+        mon.cycle_time_by_variant.setdefault(product.variant, Tally()).add(cycle_time)
+
+    def record_output(self, product: Product) -> None:
+        """Closed networks: an entity completed the output station (e.g. a truck dumped).
+
+        Cycle time is the time since this entity's previous output, i.e. one full
+        loop such as a truck's load-haul-dump-return cycle.
+        """
+        now = self.env.now
+        self._count_output(product, now - product.last_output)
+        product.last_output = now
+
     def retire(self, product: Product, *, scrapped: bool, machine: str) -> None:
         now = self.env.now
         mon = self.monitor
         self.products.pop(product.id, None)
         mon.wip.add(now, -1)
+        mon.total_exited += 1
         if scrapped:
             mon.scrapped += 1
             mon.total_scrapped += 1
-        else:
-            mon.completed += 1
-            mon.total_completed += 1
-            mon.completion_times.append(now)
-            ct = now - product.created
-            mon.completion_cycle_times.append(ct)
-            mon.cycle_time.add(ct)
-            mon.cycle_time_by_variant.setdefault(product.variant, Tally()).add(ct)
+        elif not self.scenario.is_closed:
+            self._count_output(product, now - product.created)
         if mon.streaming:
             mon.emit(
                 {
@@ -485,7 +517,8 @@ class FactoryModel:
                 for m in self.machines.values()
             },
             "buffers": {
-                b.id: [{"product": p.id, "ready_at": p.ready_at} for p in b.contents()] for b in self.buffers.values()
+                b.id: [{"product": p.id, "entered_at": p.entered_at, "ready_at": p.ready_at} for p in b.contents()]
+                for b in self.buffers.values()
             },
             "products": {p.id: p.variant for p in self.products.values()},
         }

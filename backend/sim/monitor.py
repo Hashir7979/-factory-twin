@@ -150,6 +150,7 @@ class Monitor:
         self.total_created = 0
         self.total_completed = 0
         self.total_scrapped = 0
+        self.total_exited = 0  # left the system at the sink or as scrap
         self.cycle_time = Tally()
         self.cycle_time_by_variant: dict[str, Tally] = {}
         # Completion timestamps for the whole run (warm-up included): used for

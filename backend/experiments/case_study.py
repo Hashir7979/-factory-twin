@@ -18,8 +18,9 @@ from typing import Any
 from sim import Scenario, apply_overrides, load_scenario
 from sim.config import Scenario as ScenarioModel
 
-from .optimizer import Economics, Variable, optimize
+from .optimizer import Variable, optimize
 from .runner import ExperimentResult, ReplicationResult, compare, run_replication, summarize
+from .stats import estimate
 
 REPS = 20
 
@@ -149,8 +150,85 @@ async def _optimize(pool: ProcessPoolExecutor, sc: Scenario) -> Any:
     ]
     variables.append(Variable(key="resources.technicians", low=1, high=3))
     return await optimize(
-        sc, variables, Economics(), trials=30, seeds=[1, 2, 3], evaluate_replications=evaluate, sampler_seed=1
+        sc, variables, sc.economics, trials=30, seeds=[1, 2, 3], evaluate_replications=evaluate, sampler_seed=1
     )
+
+
+def earthmoving_section(pool: ProcessPoolExecutor, seeds: list[int]) -> list[str]:
+    """Fleet-size sweep: the classic 'how many trucks per excavator?' analysis."""
+    from collections import Counter
+
+    from .optimizer import cost_per_hour
+
+    em = load_scenario("earthmoving")
+    econ = em.economics
+    load_t = em.station("load").process_time.mean
+    loop_t = load_t + sum(b.mean_transit() for b in em.buffers) + em.station("dump").process_time.mean
+    rows = []
+    for n in range(2, 11):
+        sc = apply_overrides(em, {"source.max_arrivals": n})
+        runs = replicate(pool, sc, seeds, sc.run.horizon, sc.run.warmup)
+        tp = estimate([r.kpis.line.throughput_per_hour for r in runs])
+        util = sum(next(x for x in r.kpis.stations if x.id == "load").utilization for r in runs) / len(runs)
+        queue = sum(next(b for b in r.kpis.buffers if b.id == "R_return").mean_queue_delay for r in runs) / len(runs)
+        cost = cost_per_hour(sc, econ).total
+        label = Counter(r.kpis.bottleneck.label for r in runs).most_common(1)[0][0]
+        rows.append((n, tp, util, queue, cost, label))
+
+    def per_m3(row: Any) -> float:
+        return float(row[4] / (row[1].mean * em.units_per_output))
+
+    def profit(row: Any) -> float:
+        return float(row[1].mean * econ.margin_per_part - row[4])
+
+    best_cost = min(rows, key=per_m3)[0]
+    best_profit = max(rows, key=profit)[0]
+    by_n = {row[0]: row for row in rows}
+    # Profit noise of the best row: the 95% CI half-width of throughput times revenue per load.
+    noise = by_n[best_profit][1].half_width * econ.margin_per_part
+    gap = profit(by_n[best_profit]) - profit(by_n[best_cost])
+    if best_profit == best_cost:
+        conclusion = f"**{best_cost} trucks** gives both the lowest cost per m³ and the highest profit."
+    elif gap < noise:
+        conclusion = (
+            f"Cost per m³ is lowest at **{best_cost} trucks**. {best_profit} trucks earns €{gap:.0f}/h more, "
+            f"which is inside the replication noise (±€{noise:.0f}/h), so {best_cost} is the robust choice; the "
+            f"extra truck mostly buys cover for excavator breakdowns."
+        )
+    else:
+        conclusion = (
+            f"Cost per m³ is lowest at {best_cost} trucks, but {best_profit} trucks earns €{gap:.0f}/h more "
+            f"(beyond the ±€{noise:.0f}/h noise), so the extra output pays for the truck."
+        )
+    conclusion += (
+        f" Beyond that, every extra truck adds €{econ.fleet_cost_per_hour:.0f}/h and only lengthens the queue "
+        "at the excavator."
+    )
+    table = ["| Trucks | Match factor | Production (m³/h) | Excavator utilization | Truck queue at excavator (min) "
+             "| Cost (€/h) | Cost per m³ (€) | Profit (€/h) | Constraint |",
+             "|---:|---:|---:|---:|---:|---:|---:|---:|---|"]  # fmt: skip
+    for row in rows:
+        n, tp, util, queue, cost, label = row
+        mark = " ◀ lowest cost/m³" if n == best_cost else ""
+        mark += " ◀ highest profit" if n == best_profit else ""
+        table.append(
+            f"| {n} | {n * load_t / loop_t:.2f} | {tp.mean * em.units_per_output:.0f} ± {tp.half_width * em.units_per_output:.0f} "
+            f"| {util:.0%} | {queue / 60:.1f} | {cost:.0f} | {per_m3(row):.2f} | {profit(row):.0f}{mark} | {label} |"
+        )
+    return [
+        "## 7. Third scenario: earthmoving fleet sizing (closed network)", "",
+        "A fleet of 18 m³ trucks cycles excavator → loaded haul → dump → empty return. Unlike the lines above, "
+        "nothing leaves the system: production counts each dump, and cycle time is a truck's round trip. "
+        f"Truck €{econ.fleet_cost_per_hour:.0f}/h, excavator €{econ.station_machine_cost_per_hour['load']:.0f}/h, "
+        f"dozer €{econ.station_machine_cost_per_hour['dump']:.0f}/h, revenue €{econ.margin_per_part:.0f} per load. "
+        f"{len(seeds)} replications per fleet size.", "",
+        *table, "",
+        "The **match factor** (trucks × loading time ÷ uncongested truck cycle) is the textbook planning estimate: "
+        "below 1 the excavator waits for trucks, above 1 trucks wait for the excavator. The simulation adds what "
+        "the formula misses: random haul times and excavator breakdowns make trucks bunch, so the excavator "
+        "still idles at a match factor near 1 and output keeps rising until about one truck beyond it.", "",
+        conclusion, "",
+    ]  # fmt: skip
 
 
 def main() -> int:
@@ -262,6 +340,8 @@ def main() -> int:
                   "Reading: the center ships about as fast as orders arrive (180/h), so an extra packing bench adds "
                   "little throughput. It does cut order lead time and WIP sharply by removing packing queues; "
                   "an extra picker changes nothing because picking is not the constraint.", ""]  # fmt: skip
+
+        lines += earthmoving_section(pool, seeds)
 
     lines.append(f"_Runtime: {time.time() - started:.0f} s on {os.cpu_count()} CPU cores._")
     print("\n".join(lines))

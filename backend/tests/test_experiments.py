@@ -134,3 +134,27 @@ def test_pareto_front_excludes_dominated() -> None:
         return Trial(number=n, evaluation=ev, cached=False)
 
     assert pareto_front([t(1, 10, 5), t(2, 12, 6), t(3, 9, 7), t(4, 12, 5)]) == [4]
+
+
+def test_optimizer_sizes_the_truck_fleet() -> None:
+    from sim import load_scenario
+
+    sc = load_scenario("earthmoving")
+
+    async def evaluate(cand: Scenario, run_seeds: list[int]) -> list[ReplicationResult]:
+        return [run_replication(cand, s, cand.run.horizon, cand.run.warmup) for s in run_seeds]
+
+    result = asyncio.run(
+        optimize(
+            sc,
+            [Variable(key="source.max_arrivals", low=2, high=10)],
+            sc.economics,
+            trials=10,
+            seeds=[1, 2, 3, 4],
+            evaluate_replications=evaluate,
+        )
+    )
+    # Profit peaks where the fleet just saturates the excavator (5-6 trucks): fewer
+    # trucks waste the excavator, more only queue and cost money.
+    assert result.best.params["source.max_arrivals"] in (5, 6)
+    assert result.best.costs.fleet == result.best.params["source.max_arrivals"] * 88

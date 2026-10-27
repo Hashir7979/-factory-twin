@@ -89,7 +89,8 @@ class ComparisonRequest(_Strict):
 class OptimizationRequest(_Strict):
     scenario_id: str = Field(max_length=40)
     variables: list[Variable] = Field(min_length=1, max_length=12)
-    economics: Economics = Field(default_factory=Economics)
+    # Omitted → the scenario's own cost model.
+    economics: Economics | None = None
     trials: int = Field(default=30, ge=3)
     replications: int = Field(default=3, ge=1, le=10)
     base_seed: int = Field(default=1, ge=0, le=2**31 - 1_000)
