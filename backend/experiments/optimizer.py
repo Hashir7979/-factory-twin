@@ -206,7 +206,7 @@ async def optimize(
 ) -> OptimizationResult:
     validate_variables(scenario, variables)
     confirm_seeds = [CONFIRM_SEED_OFFSET + s for s in range(max(5, 2 * len(seeds)))]
-    total_steps = 1 + trials + 1 + CONFIRM_TOP_K
+    total_steps = 1 + trials + 1 + CONFIRM_TOP_K + len(variables)
     step = 0
 
     def advance() -> None:
@@ -253,6 +253,24 @@ async def optimize(
         advance()
 
     best, best_profit = max(candidates, key=lambda c: c[0].profit.mean, default=(confirmed_base, base_profit))
+
+    # Polish: the search may carry resources that do nothing but cost money (e.g. an
+    # extra technician picked up by noise). Try removing one unit of each variable on
+    # the confirmation seeds and keep the change when paired profit improves.
+    if best is not confirmed_base:
+        for v in variables:
+            trial_params = dict(best.params)
+            if trial_params[v.key] - 1 < v.low:
+                advance()
+                continue
+            trial_params[v.key] -= 1
+            trimmed_sc = apply_overrides(scenario, dict(trial_params))
+            res = await evaluate_replications(trimmed_sc, confirm_seeds)
+            ev = evaluate(trimmed_sc, trial_params, res, econ)
+            if ev.profit.mean > best.profit.mean:
+                best, best_profit = ev, _profit_samples(res, ev.cost_per_hour, econ)
+                candidates.append((ev, best_profit))
+            advance()
     diff: Difference | None = None
     significant = False
     if best.profit.mean > confirmed_base.profit.mean:

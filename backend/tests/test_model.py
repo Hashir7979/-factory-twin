@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from sim import FactoryModel, Scenario, apply_overrides, compute_kpis
+from sim import FactoryModel, Scenario, apply_overrides, compute_kpis, list_scenarios, load_scenario
 from sim.monitor import MachineState
 from tests.conftest import const, exp, single_station
 
@@ -183,3 +183,13 @@ def test_exponential_variant_mix(battery: Scenario) -> None:
 def test_unbounded_queue_with_exponential() -> None:
     model = run(single_station(exp(2), exp(1), horizon=5_000))
     assert model.monitor.total_completed > 0
+
+
+@pytest.mark.parametrize("scenario_id", [s.id for s in list_scenarios()])
+def test_every_bundled_scenario_runs_and_conserves_parts(scenario_id: str) -> None:
+    model = FactoryModel(load_scenario(scenario_id))
+    model.run(horizon=7_200, warmup=600)
+    mon = model.monitor
+    assert mon.total_completed > 0
+    assert mon.total_created == mon.total_completed + mon.total_scrapped + len(model.products)
+    assert compute_kpis(model).bottleneck.station is not None

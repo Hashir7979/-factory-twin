@@ -1,0 +1,63 @@
+{
+  "id": "fulfillment_center",
+  "name": "E-commerce Fulfillment Center",
+  "description": "U-shaped order fulfillment flow: four pickers, an L-shaped takeaway conveyor, three packing benches (large parcels pack slower), label-and-scan with manual relabel for misreads, a sorter conveyor and two loading docks staffed by operators. Built from the same JSON schema as the battery line with no code changes.",
+  "variants": [
+    {"id": "S", "name": "Small parcel", "weight": 0.7, "color": "#14b8a6"},
+    {"id": "L", "name": "Large parcel", "weight": 0.3, "color": "#a855f7"}
+  ],
+  "source": {
+    "id": "source",
+    "name": "Order Release",
+    "interarrival": {"type": "exponential", "mean": 20},
+    "output": "Q_pick",
+    "pos": [-18, -8]
+  },
+  "buffers": [
+    {"id": "Q_pick", "name": "Pick Queue", "capacity": 30, "pos": [-13, -8]},
+    {"id": "C_take", "name": "Takeaway Conveyor", "capacity": 14, "kind": "conveyor",
+     "transit_time": 45, "pos": [8, 1], "path": [[-2, -8], [8, -8], [8, 4]]},
+    {"id": "Q_label", "name": "Label Queue", "capacity": 8, "pos": [3.5, 9]},
+    {"id": "Q_relabel", "name": "Relabel Queue", "capacity": 10, "pos": [0, 14]},
+    {"id": "C_sort", "name": "Sorter", "capacity": 12, "kind": "conveyor",
+     "transit_time": 25, "pos": [-8, 9], "path": [[-3, 9], [-13, 9]]}
+  ],
+  "stations": [
+    {
+      "id": "pick", "name": "Picking", "servers": 4, "input": "Q_pick", "output": "C_take",
+      "process_time": {"type": "lognormal", "mean": 70, "std": 25},
+      "pos": [-7, -8]
+    },
+    {
+      "id": "pack", "name": "Packing", "servers": 3, "input": "C_take", "output": "Q_label",
+      "process_time": {"type": "normal", "mean": 50, "std": 10, "min": 25},
+      "process_time_by_variant": {"L": {"type": "normal", "mean": 70, "std": 14, "min": 35}},
+      "failure": {"ttf": {"type": "exponential", "mean": 5400},
+                  "ttr": {"type": "lognormal", "mean": 240, "std": 90}},
+      "pos": [8, 9]
+    },
+    {
+      "id": "label", "name": "Label & Scan", "kind": "qc", "input": "Q_label", "output": "C_sort",
+      "process_time": {"type": "uniform", "low": 12, "high": 16},
+      "failure": {"ttf": {"type": "exponential", "mean": 7200},
+                  "ttr": {"type": "lognormal", "mean": 180, "std": 60}},
+      "qc": {"pass_prob": 0.97, "rework_prob": 0.025, "rework_output": "Q_relabel"},
+      "pos": [0, 9]
+    },
+    {
+      "id": "relabel", "name": "Manual Relabel", "input": "Q_relabel", "output": "C_sort",
+      "process_time": {"type": "triangular", "low": 40, "mode": 60, "high": 120},
+      "needs_operator": true,
+      "pos": [-5, 14]
+    },
+    {
+      "id": "ship", "name": "Dock Loading", "servers": 2, "input": "C_sort", "output": "sink",
+      "process_time": {"type": "triangular", "low": 25, "mode": 30, "high": 40},
+      "needs_operator": true,
+      "pos": [-17, 9]
+    }
+  ],
+  "resources": {"technicians": 1, "operators": 3},
+  "sink": {"pos": [-22, 9]},
+  "run": {"horizon": 43200, "warmup": 14400, "seed": 7}
+}

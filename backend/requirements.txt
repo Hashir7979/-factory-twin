@@ -1,0 +1,8 @@
+# Runtime dependencies (pinned for reproducible builds; see pyproject.toml for ranges).
+fastapi==0.162.0
+numpy==2.5.4
+optuna==5.0.0
+pydantic==2.14.1
+scipy==1.18.1
+simpy==4.1.2
+uvicorn[standard]==0.54.0

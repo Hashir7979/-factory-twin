@@ -14,7 +14,7 @@ const CARDS = [
   ["cycle", "Cycle time", "mean, source → shipping"],
   ["wip", "WIP", "parts in system (time-avg)"],
   ["oee", "Line OEE", "bottleneck A × P × Q"],
-  ["fpy", "First-pass yield", "passed at test"],
+  ["fpy", "First-pass yield", "passed first inspection"],
 ] as const;
 
 export class KpiPanel {

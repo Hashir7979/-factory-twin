@@ -1,0 +1,12 @@
+services:
+  twin:
+    build: .
+    image: factory-twin:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # Tune to the host: worker processes for replications / optimization.
+      SIM_WORKERS: "4"
+      MAX_SESSIONS: "20"
+      LOG_LEVEL: INFO
+    restart: unless-stopped

@@ -64,7 +64,13 @@ def test_unknown_or_malicious_scenario_ids(client: TestClient, bad: str) -> None
 
 
 def test_single_run_with_override(client: TestClient) -> None:
-    body = {"scenario_id": "battery_line", "overrides": {"station.weld.servers": 2}, "seed": 3, "horizon": 14400}
+    body = {
+        "scenario_id": "battery_line",
+        "overrides": {"station.weld.servers": 2},
+        "seed": 3,
+        "horizon": 14400,
+        "warmup": 1800,
+    }
     r = client.post("/api/runs", json=body)
     assert r.status_code == 200, r.text
     assert r.json()["bottleneck"]["station"] == "stack"
@@ -87,7 +93,9 @@ def test_run_validation(client: TestClient, body: dict[str, Any], status: int) -
 
 
 def test_experiment_job_lifecycle_and_csv(client: TestClient) -> None:
-    r = client.post("/api/experiments", json={"scenario_id": "battery_line", "replications": 3, "horizon": 14400})
+    r = client.post(
+        "/api/experiments", json={"scenario_id": "battery_line", "replications": 3, "horizon": 14400, "warmup": 1800}
+    )
     assert r.status_code == 202
     job = wait_job(client, r.json()["job_id"])
     assert job["status"] == "done", job
@@ -108,6 +116,7 @@ def test_comparison_uses_paired_seeds(client: TestClient) -> None:
         "b_overrides": {"station.weld.servers": 2},
         "replications": 3,
         "horizon": 14400,
+        "warmup": 1800,
     }
     job = wait_job(client, client.post("/api/comparisons", json=body).json()["job_id"])
     assert job["status"] == "done", job
@@ -233,6 +242,7 @@ def test_optimizer_defaults_and_job(client: TestClient) -> None:
         "trials": 4,
         "replications": 2,
         "horizon": 14400,
+        "warmup": 1800,
     }
     r = client.post("/api/optimizations", json=body)
     assert r.status_code == 202, r.text
