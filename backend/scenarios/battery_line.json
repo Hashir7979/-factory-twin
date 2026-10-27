@@ -1,0 +1,72 @@
+{
+  "id": "battery_line",
+  "name": "EV Battery Module Line",
+  "description": "Seven-stage battery-module assembly line: cell prep, dual stacking cells with variant changeovers, laser welding, end-of-line test with an offline rework cell, and packaging. Laser welding is the designed constraint (about 54 s effective cycle including failures).",
+  "variants": [
+    {"id": "M12", "name": "12-cell module", "weight": 0.6, "color": "#3b82f6"},
+    {"id": "M16", "name": "16-cell module", "weight": 0.4, "color": "#f59e0b"}
+  ],
+  "source": {
+    "id": "source",
+    "name": "Cell Supply",
+    "interarrival": {"type": "exponential", "mean": 45},
+    "output": "B0",
+    "pos": [-26, 0]
+  },
+  "buffers": [
+    {"id": "B0", "name": "Incoming Cells", "capacity": 10, "pos": [-22, 0]},
+    {"id": "C1", "name": "Prep → Stacking Conveyor", "capacity": 8, "kind": "conveyor",
+     "transit_time": 20, "pos": [-10.5, 0], "path": [[-15, 0], [-6, 0]]},
+    {"id": "B2", "name": "Weld Infeed", "capacity": 6, "pos": [0.5, 0]},
+    {"id": "C3", "name": "Weld → Test Conveyor", "capacity": 6, "kind": "conveyor",
+     "transit_time": 15, "pos": [9, 0], "path": [[6.5, 0], [11.5, 0]]},
+    {"id": "R1", "name": "Rework Queue", "capacity": 10, "pos": [14, 6]},
+    {"id": "B4", "name": "Pack Infeed", "capacity": 8, "pos": [19, 0]}
+  ],
+  "stations": [
+    {
+      "id": "prep", "name": "Cell Prep & Sorting", "input": "B0", "output": "C1",
+      "process_time": {"type": "normal", "mean": 35, "std": 4, "min": 20},
+      "failure": {"ttf": {"type": "exponential", "mean": 14400},
+                  "ttr": {"type": "lognormal", "mean": 300, "std": 120}},
+      "pos": [-18, 0]
+    },
+    {
+      "id": "stack", "name": "Cell Stacking", "servers": 2, "input": "C1", "output": "B2",
+      "process_time": {"type": "triangular", "low": 70, "mode": 80, "high": 95},
+      "process_time_by_variant": {
+        "M16": {"type": "triangular", "low": 100, "mode": 110, "high": 125}
+      },
+      "setup_time": {"type": "normal", "mean": 12, "std": 3, "min": 5},
+      "pos": [-3, 0]
+    },
+    {
+      "id": "weld", "name": "Laser Welding", "input": "B2", "output": "C3",
+      "process_time": {"type": "normal", "mean": 50, "std": 5, "min": 35},
+      "failure": {"ttf": {"type": "exponential", "mean": 7200},
+                  "ttr": {"type": "lognormal", "mean": 600, "std": 300}},
+      "pos": [4, 0]
+    },
+    {
+      "id": "test", "name": "End-of-Line Test", "kind": "qc", "input": "C3", "output": "B4",
+      "process_time": {"type": "normal", "mean": 30, "std": 3, "min": 20},
+      "needs_operator": true,
+      "qc": {"pass_prob": 0.92, "rework_prob": 0.06, "rework_output": "R1"},
+      "pos": [14, 0]
+    },
+    {
+      "id": "rework", "name": "Rework Cell", "input": "R1", "output": "B4",
+      "process_time": {"type": "lognormal", "mean": 240, "std": 60},
+      "needs_operator": true,
+      "pos": [19, 6]
+    },
+    {
+      "id": "pack", "name": "Packaging", "input": "B4", "output": "sink",
+      "process_time": {"type": "uniform", "low": 25, "high": 35},
+      "pos": [23, 0]
+    }
+  ],
+  "resources": {"technicians": 1, "operators": 2},
+  "sink": {"pos": [27, 0]},
+  "run": {"horizon": 32400, "warmup": 3600, "seed": 42}
+}
